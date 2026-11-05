@@ -12,6 +12,7 @@
 #include <fstream>
 #include <cstdlib>
 #include <chrono>
+#include <functional>
 #ifdef _OPENMP
 #include <omp.h>
 #endif
@@ -135,6 +136,110 @@ void PUInterpolator::deduplicate(Eigen::MatrixXd& points, Eigen::VectorXd& value
         std::cout << "  [PU fit] deduplication removed: " << (n - kept.size()) << " points\n";
     points = new_pts;
     values = new_vals;
+}
+
+// ── Scale-free merging of tangent-point clusters ───────────────────
+//
+// Samples whose closest surface points (nearly) coincide — every sample in a
+// grid column normal to a flat face, for instance — get separately estimated
+// tangent points that scatter around the shared foot point. A fixed-radius
+// greedy dedup keeps the survivors just above its radius, which leaves exactly
+// the near-coincident constraints that make the local solves ill-conditioned.
+//
+// The test here is relative and needs no length scale: tangent points y_k, y_l
+// of samples x_k, x_l are the same constraint when the projection contracts
+// their separation by more than `ratio`,
+//     |y_k - y_l| < ratio * |x_k - x_l|.
+// Distinct neighbours contract by O(R/r) (far samples over convex parts) or
+// not at all; shared foot points contract by ~estimation error / sample
+// spacing. Each connected component of such pairs is replaced by its most
+// accurate member: the tangent point whose sample is closest to the surface
+// (smallest |d|; a centroid would sink below curved surfaces). Works for
+// scattered samples as well as grids.
+//
+// Candidate search is exact: |x_k - x_l| <= |d_k| + |d_l| + |y_k - y_l|, so any
+// qualifying l lies within ratio (|d_k| + max|d|) / (1 - ratio) of y_k.
+void PUInterpolator::merge_tangent_clusters(Eigen::MatrixXd& pts, Eigen::VectorXd& vals,
+                                            std::vector<int>& partner, int N,
+                                            double ratio, bool verbose) {
+    const int M = (int)pts.rows() - N;
+    if (M < 2 || !(ratio > 0.0) || ratio >= 1.0) return;
+    Eigen::MatrixXd Y = pts.bottomRows(M);
+    Eigen::MatrixXd X(M, 3);
+    Eigen::VectorXd d(M);
+    for (int k = 0; k < M; k++) {
+        X.row(k) = pts.row(partner[N + k]);
+        d(k) = (X.row(k) - Y.row(k)).norm();
+    }
+    const double dmax = d.maxCoeff();
+    KDTree3D tree(Y);
+
+    std::vector<int> parent(M);
+    std::iota(parent.begin(), parent.end(), 0);
+    std::function<int(int)> find = [&](int a) {
+        while (parent[a] != a) { parent[a] = parent[parent[a]]; a = parent[a]; }
+        return a;
+    };
+    for (int k = 0; k < M; k++) {
+        const Eigen::Vector3d yk = Y.row(k).transpose();
+        const double r = ratio * (d(k) + dmax) / (1.0 - ratio) * (1.0 + 1e-12);
+        for (int l : tree.query_ball_point(yk, r)) {
+            if (l <= k) continue;
+            const double dy = (Y.row(k) - Y.row(l)).norm();
+            const double dx = (X.row(k) - X.row(l)).norm();
+            if (dy < ratio * dx) {
+                int a = find(k), b = find(l);
+                if (a != b) parent[std::max(a, b)] = std::min(a, b);
+            }
+        }
+    }
+
+    // Component bookkeeping slot = smallest index; best[root] = member whose
+    // sample is nearest the surface, whose tangent point is kept.
+    std::vector<int> root(M), count(M, 0), best(M, -1);
+    for (int k = 0; k < M; k++) {
+        root[k] = find(k);
+        count[root[k]]++;
+        int& b = best[root[k]];
+        if (b < 0 || d(k) < d(b)) b = k;
+    }
+    std::vector<int> old_to_new(N + M, -1);
+    for (int i = 0; i < N; i++) old_to_new[i] = i;
+    int next = N, merged = 0, largest = 1;
+    double max_diam = 0.0;
+    for (int k = 0; k < M; k++)
+        if (root[k] == k) old_to_new[N + k] = next++;
+    for (int k = 0; k < M; k++) {
+        if (root[k] != k) {
+            old_to_new[N + k] = old_to_new[N + root[k]];
+            merged++;
+            max_diam = std::max(max_diam, (Y.row(k) - Y.row(best[root[k]])).norm());
+        }
+        largest = std::max(largest, count[k]);
+    }
+    if (merged == 0) return;
+
+    Eigen::MatrixXd new_pts(next, pts.cols());
+    Eigen::VectorXd new_vals(next);
+    std::vector<int> new_partner(next, -1);
+    new_pts.topRows(N) = pts.topRows(N);
+    new_vals.head(N) = vals.head(N);
+    for (int i = 0; i < N; i++)
+        new_partner[i] = partner[i] >= 0 ? old_to_new[partner[i]] : -1;
+    for (int k = 0; k < M; k++) {
+        if (root[k] != k) continue;
+        const int j = old_to_new[N + k];
+        new_pts.row(j) = Y.row(best[k]);
+        new_vals(j) = 0.0;
+        new_partner[j] = partner[N + best[k]];   // the kept tangent point's own sample
+    }
+    pts = std::move(new_pts);
+    vals = std::move(new_vals);
+    partner = std::move(new_partner);
+    if (verbose)
+        std::cout << "  [PU fit] adaptive dedup (ratio " << ratio << "): merged " << merged
+                  << " of " << M << " tangent points; largest cluster " << largest
+                  << ", max member-to-representative distance " << max_diam << "\n";
 }
 
 // ── Rank repair for degenerate local solves ─────────────────────────
@@ -518,6 +623,8 @@ void PUInterpolator::fit(const Eigen::MatrixXd& points,
             partner[proj_src[k]] = N + k;   // input -> its projection
             partner[N + k] = proj_src[k];   // projection -> its input
         }
+        if (dedup_mode_ == "adaptive")
+            merge_tangent_clusters(pts, vals, partner, N, dedup_ratio_, verbose_);
     } else {
         pts = points;
         vals = values;
@@ -1215,6 +1322,84 @@ void PUInterpolator::eval_gradients(const Eigen::MatrixXd& x_new,
                 result.row(i) = patches_[nearest].interp->predict_gradients(qpt).row(0);
             }
         }
+    }
+}
+
+// ── predict_hessians ───────────────────────────────────────────────
+//
+// F = N / W with N = sum v_j f_j and W = sum v_j. Differentiating W F = N twice:
+//   grad F = (grad N - F grad W) / W
+//   Hess F = (Hess N - grad W grad F^T - grad F grad W^T - F Hess W) / W,
+//   Hess N = sum v_j H_j + grad v_j g_j^T + g_j grad v_j^T + f_j Hess v_j.
+// Radial Wendland weight v = psi(r/R), u = (x - c)/r:
+//   grad v = psi'(t)/R u,   Hess v = psi''(t)/R^2 u u^T + psi'(t)/(R r) (I - u u^T),
+//   psi' = -20 t (1-t)^3,   psi'' = -20 (1-t)^2 (1-4t),   psi'/(R r) = -20 (1-t)^3 / R^2.
+// Cubic RBF: g = p + 3 sum a r v_i, H = 3 sum a (r I + v v^T / r) (0 at r = 0).
+void PUInterpolator::predict_hessians(const Eigen::MatrixXd& x, Eigen::VectorXd& values,
+                                      Eigen::MatrixXd& grads, Eigen::MatrixXd& hessians) const {
+    if (use_box_)
+        throw std::runtime_error("predict_hessians: only the sphere partition is supported");
+    const int M = (int)x.rows();
+    values.resize(M); grads.resize(M, 3); hessians.resize(M, 9);
+    auto local = [](const DuchonInterpolator& fit, const Eigen::Vector3d& p,
+                    double& f, Eigen::Vector3d& g, Eigen::Matrix3d& H) {
+        const Eigen::MatrixXd& q = fit.centers();
+        const Eigen::VectorXd& a = fit.alpha();
+        f = fit.affine_constant() + fit.affine_linear().dot(p);
+        g = fit.affine_linear();
+        H.setZero();
+        for (int i = 0; i < (int)a.size(); i++) {
+            Eigen::Vector3d v = p - q.row(i).transpose();
+            double r = v.norm();
+            f += a(i) * r * r * r;
+            g += 3.0 * a(i) * r * v;
+            if (r > 0.0) H += 3.0 * a(i) * (r * Eigen::Matrix3d::Identity() + v * v.transpose() / r);
+        }
+    };
+    #pragma omp parallel for schedule(dynamic, 64)
+    for (int m = 0; m < M; m++) {
+        Eigen::Vector3d p = x.row(m).transpose();
+        std::vector<int> hits;
+        query_patches_containing(p, hits);
+        std::sort(hits.begin(), hits.end());
+        double W = 0.0, Nv = 0.0;
+        Eigen::Vector3d gN = Eigen::Vector3d::Zero(), gW = Eigen::Vector3d::Zero();
+        Eigen::Matrix3d HN = Eigen::Matrix3d::Zero(), HW = Eigen::Matrix3d::Zero();
+        for (int j : hits) {
+            const auto& patch = patches_[j];
+            const double R = patch.half_ext(0);
+            Eigen::Vector3d d = p - patch.center;
+            const double r = d.norm(), t = std::min(r / R, 1.0);
+            if (t >= 1.0) continue;
+            const double s = 1.0 - t;
+            const double v = s * s * s * s * (4.0 * t + 1.0);
+            const double dpsi = -20.0 * t * s * s * s, d2psi = -20.0 * s * s * (1.0 - 4.0 * t);
+            Eigen::Vector3d gv = Eigen::Vector3d::Zero();
+            Eigen::Matrix3d Hv = (-20.0 * s * s * s / (R * R)) * Eigen::Matrix3d::Identity();
+            if (r > 0.0) {
+                Eigen::Vector3d u = d / r;
+                gv = (dpsi / R) * u;
+                Hv = (d2psi / (R * R)) * u * u.transpose()
+                   + (-20.0 * s * s * s / (R * R)) * (Eigen::Matrix3d::Identity() - u * u.transpose());
+            }
+            double f; Eigen::Vector3d g; Eigen::Matrix3d H;
+            local(*patch.interp, p, f, g, H);
+            W += v; Nv += v * f;
+            gW += gv; gN += v * g + f * gv;
+            HW += Hv;
+            HN += v * H + gv * g.transpose() + g * gv.transpose() + f * Hv;
+        }
+        double F; Eigen::Vector3d G; Eigen::Matrix3d Hm;
+        if (W > 0.0) {
+            F = Nv / W;
+            G = (gN - F * gW) / W;
+            Hm = (HN - gW * G.transpose() - G * gW.transpose() - F * HW) / W;
+        } else {
+            local(*patches_[query_nearest_patch(p)].interp, p, F, G, Hm);
+        }
+        values(m) = F;
+        grads.row(m) = G.transpose();
+        for (int k = 0; k < 3; k++) for (int l = 0; l < 3; l++) hessians(m, 3 * k + l) = Hm(k, l);
     }
 }
 

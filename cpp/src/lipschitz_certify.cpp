@@ -236,7 +236,7 @@ void PUInterpolator::prepare_certify() const {
 // ── certify_boxes ───────────────────────────────────────────────────
 
 PUInterpolator::BoxCertificates PUInterpolator::certify_boxes(
-    const Eigen::MatrixXd& lo, const Eigen::MatrixXd& hi) const
+    const Eigen::MatrixXd& lo, const Eigen::MatrixXd& hi, bool hull_only) const
 {
     if (lo.rows() != hi.rows() || lo.cols() != 3 || hi.cols() != 3)
         throw std::invalid_argument("certify_boxes: lo and hi must be (m, 3)");
@@ -282,15 +282,20 @@ PUInterpolator::BoxCertificates PUInterpolator::certify_boxes(
             static const int KL[6][2] = {{0,0},{0,1},{0,2},{1,1},{1,2},{2,2}};
             double tiny = 0.0;   // contributions of centers whose r underflowed
             for (int i = 0; i < n; i++) {
-                double v[3], r2 = 0.0, R2 = 0.0;
+                double v[3], r2 = 0.0;
                 for (int k = 0; k < 3; k++) {
                     v[k] = x0a[k] - q(i, k);
                     r2 += v[k] * v[k];
-                    double far = std::max(std::abs(bhi[k] - q(i, k)), std::abs(blo[k] - q(i, k)));
-                    R2 += far * far;
                 }
                 const double ai = a(i);
-                B0s.add(std::abs(ai) * R2);
+                if (!hull_only) {                       // B0 needs the far-corner distances
+                    double R2 = 0.0;
+                    for (int k = 0; k < 3; k++) {
+                        double far = std::max(std::abs(bhi[k] - q(i, k)), std::abs(blo[k] - q(i, k)));
+                        R2 += far * far;
+                    }
+                    B0s.add(std::abs(ai) * R2);
+                }
                 const double r = std::sqrt(r2);
                 F.add(ai * r * r2);
                 const double ar = ai * r;
@@ -333,7 +338,7 @@ PUInterpolator::BoxCertificates PUInterpolator::certify_boxes(
             L.hn_up = sym_norm_up(h);   // |H|_2 <= min(Frobenius, max row sum)
             double blo0, bhi0;
             B0s.enclose(n, blo0, bhi0);
-            L.B0 = up(pc.lin_norm_up + up(3.0 * bhi0));
+            L.B0 = hull_only ? kInf : up(pc.lin_norm_up + up(3.0 * bhi0));
             double Z2 = 0.0;
             for (int k = 0; k < 3; k++) {
                 double far = up(std::max(std::abs(bhi[k] - pc.centroid(k)), std::abs(blo[k] - pc.centroid(k))));
@@ -444,6 +449,7 @@ PUInterpolator::BoxCertificates PUInterpolator::certify_boxes(
 
         out.status(b) = 0;
         out.hull_sign(b) = allpos ? 1 : (allneg ? -1 : 0);
+        if (hull_only) continue;               // no center value, no Lipschitz bound
         double F0lo = hull_lo, F0hi = hull_hi;
         if (den.lo > 0.0) {
             double qs[4] = {num.lo / den.lo, num.lo / den.hi, num.hi / den.lo, num.hi / den.hi};

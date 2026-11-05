@@ -45,8 +45,18 @@ def grid_points(n, lo=-0.5, hi=0.5):
     return np.stack([X.ravel(), Y.ravel(), Z.ravel()], 1)
 
 
-def make_input(name, n, seed=1):
-    """Return (points, values, description dict) for an input name and grid size."""
+def make_input(name, n, seed=1, scatter=False):
+    """Return (points, values, description dict) for an input name and grid size.
+
+    With ``scatter`` the n^3 samples are drawn uniformly at random over the same
+    box instead of on a grid (the irregular-sampling case).
+    """
+    if name in ANALYTIC and scatter:
+        pts = np.random.default_rng(seed).uniform(-0.5, 0.5, (n ** 3, 3))
+        vals = ANALYTIC[name](pts)
+        keep = np.abs(vals) > 1e-8
+        return pts[keep], vals[keep], {'kind': 'analytic', 'name': name, 'grid': n, 'scatter': True,
+                                       'domain': [-0.5, 0.5], 'exact_sdf': True, 'seed': seed}
     if name in ANALYTIC:
         pts = grid_points(n)
         vals = ANALYTIC[name](pts)
@@ -60,8 +70,9 @@ def make_input(name, n, seed=1):
         sys.path.insert(0, str(DEMO))
     import SDF_to_surface_3D as sdf3d
     sdf3d.seed = seed
-    _, pts, vals, _ = sdf3d.generate_test_mesh_data(str(mesh_path), name, grid_len=n)
-    return pts, vals, {'kind': 'mesh', 'name': name, 'grid': n, 'path': str(mesh_path.relative_to(REPO)),
+    _, pts, vals, _ = sdf3d.generate_test_mesh_data(str(mesh_path), name, grid_len=n, scatter=scatter)
+    return pts, vals, {'kind': 'mesh', 'name': name, 'grid': n, 'scatter': scatter, 'seed': seed,
+                       'path': str(mesh_path.relative_to(REPO)),
                        'exact_sdf': True, 'sampling': 'demo/SDF_to_surface_3D.generate_test_mesh_data'}
 
 

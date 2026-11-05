@@ -329,7 +329,9 @@ MainResult main_algorithm(
             "cubic", options.interp_overlap,
             10, 200, options.reg, options.interp_partition,
             options.verbose, options.pair_local);
-        std::static_pointer_cast<PUInterpolator>(interpolator)->set_dedup_tol(options.pu_dedup_tol);
+        auto pu = std::static_pointer_cast<PUInterpolator>(interpolator);
+        pu->set_dedup_tol(options.pu_dedup_tol);
+        pu->set_dedup_mode(options.pu_dedup_mode, options.pu_dedup_ratio);
     }
     if (options.verbose)
         std::cout << "[main_algorithm] interpolator ctor: " << ms_since(t2)/1000.0 << " s\n";

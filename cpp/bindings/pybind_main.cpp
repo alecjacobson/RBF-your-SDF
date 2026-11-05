@@ -38,6 +38,8 @@ PYBIND11_MODULE(rbfyoursdf_cpp, m) {
         .def_readwrite("interp_overlap", &sdf::Options::interp_overlap)
         .def_readwrite("pair_local", &sdf::Options::pair_local)
         .def_readwrite("pu_dedup_tol", &sdf::Options::pu_dedup_tol)
+        .def_readwrite("pu_dedup_mode", &sdf::Options::pu_dedup_mode)
+        .def_readwrite("pu_dedup_ratio", &sdf::Options::pu_dedup_ratio)
         .def_readwrite("tolerance", &sdf::Options::tolerance)
         .def_readwrite("gt_gradients", &sdf::Options::gt_gradients)
         .def_readwrite("iter_gradient_finding", &sdf::Options::iter_gradient_finding)
@@ -94,6 +96,25 @@ PYBIND11_MODULE(rbfyoursdf_cpp, m) {
              py::arg("x_new"), py::arg("chunk_size") = 5000)
         .def("predict_gradients", &sdf::Interpolator::predict_gradients,
              py::arg("x_new"), py::arg("chunk_size") = 5000)
+        .def("optimize_best_gradients", [](const sdf::Interpolator& self,
+                                           const Eigen::MatrixXd& points,
+                                           const Eigen::VectorXd& values,
+                                           const Eigen::MatrixXd& initial_guess,
+                                           int optim_steps, double lr,
+                                           const std::string& method) {
+            sdf::Interpolator::GradOpt m;
+            if (method == "bfgs") m = sdf::Interpolator::GradOpt::BatchedBFGS;
+            else if (method == "lbfgspp") m = sdf::Interpolator::GradOpt::LBFGSpp;
+            else if (method == "ascent") m = sdf::Interpolator::GradOpt::GradientAscent;
+            else if (method == "newton") m = sdf::Interpolator::GradOpt::BatchedNewton;
+            else throw std::invalid_argument("method must be 'bfgs', 'newton', 'lbfgspp' or 'ascent'");
+            py::gil_scoped_release release;
+            return self.optimize_best_gradients(points, values, 64, optim_steps, lr,
+                                                &initial_guess, 200, nullptr, m);
+        }, py::arg("points"), py::arg("values"), py::arg("initial_guess"),
+           py::arg("optim_steps") = 5, py::arg("lr") = 0.2, py::arg("method") = "bfgs",
+           "Tangent-direction refinement used by main_algorithm (paper Sec. 4.2): minimizes "
+           "D(z - d g)/d over unit g from initial_guess. Returns (N, 3) unit directions.")
         .def_property("verbose",
              &sdf::Interpolator::verbose,
              &sdf::Interpolator::set_verbose)
@@ -163,11 +184,11 @@ PYBIND11_MODULE(rbfyoursdf_cpp, m) {
             return py::make_tuple(v, g);
         }, py::arg("x_new"))
         .def("certify_boxes", [](const sdf::PUInterpolator& self,
-                                 const Eigen::MatrixXd& lo, const Eigen::MatrixXd& hi) {
+                                 const Eigen::MatrixXd& lo, const Eigen::MatrixXd& hi, bool hull_only) {
             sdf::PUInterpolator::BoxCertificates c;
             {
                 py::gil_scoped_release release;
-                c = self.certify_boxes(lo, hi);
+                c = self.certify_boxes(lo, hi, hull_only);
             }
             py::dict d;
             d["status"] = c.status; d["n_active"] = c.n_active; d["hull_sign"] = c.hull_sign;
@@ -175,9 +196,19 @@ PYBIND11_MODULE(rbfyoursdf_cpp, m) {
             d["F0_lo"] = c.F0_lo; d["F0_hi"] = c.F0_hi; d["L_best"] = c.L_best;
             d["L_local_only"] = c.L_local; d["L_B0"] = c.L_B0; d["cost_bound_terms"] = c.cost_terms;
             return d;
-        }, py::arg("lo"), py::arg("hi"),
+        }, py::arg("lo"), py::arg("hi"), py::arg("hull_only") = false,
         "Certified per-box enclosures of the PU field (sphere partition): status, W_min, "
         "center value interval, hull sign and gradient bounds. See src/lipschitz_certify.cpp.")
+        .def("predict_hessians", [](const sdf::PUInterpolator& self, const Eigen::MatrixXd& x) {
+            Eigen::VectorXd v; Eigen::MatrixXd g, H;
+            {
+                py::gil_scoped_release release;
+                self.predict_hessians(x, v, g, H);
+            }
+            return py::make_tuple(v, g, H);
+        }, py::arg("x_new"),
+        "(values (M,), gradients (M,3), Hessians (M,9) row-major) of the blended field "
+        "(sphere partition only).")
         .def("patches_containing", &sdf::PUInterpolator::patches_containing, py::arg("pt"))
         .def("nearest_patch", &sdf::PUInterpolator::nearest_patch, py::arg("pt"))
         .def("export_lipschitz_state", [](const sdf::PUInterpolator& self) {
@@ -206,6 +237,8 @@ PYBIND11_MODULE(rbfyoursdf_cpp, m) {
             policy["nearest_metric"] = "max(|x-c|-R,0) (sphere) / AABB distance (box)";
             policy["overlap"] = self.overlap();
             policy["dedup_tol"] = self.dedup_tol();
+            policy["dedup_mode"] = self.dedup_mode();
+            policy["dedup_ratio"] = self.dedup_ratio();
             py::dict out;
             out["version"] = 1;
             out["type"] = "PUInterpolator";

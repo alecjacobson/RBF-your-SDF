@@ -97,7 +97,8 @@ def main_algorithm(sdf_points, sdf_values, *, return_options: Literal[True],
 def main_algorithm(sdf_points, sdf_values, *,
                    max_iters=10, clamp=True, turn_off_short_arcs=False, reg=0,
                    interpolator_type='PU', interp_partition='sphere', interp_overlap=0.2,
-                   pair_local=False, pu_dedup_tol=5e-4, iter_gradient_finding='optimize', grad_optimizer='bfgs',
+                   pair_local=False, pu_dedup_tol=5e-4, pu_dedup_mode='greedy',
+                   pu_dedup_ratio=0.01, iter_gradient_finding='optimize', grad_optimizer='bfgs',
                    lr=0.2, optim_steps=5, degen_tol=1e-5, gt_gradients=None, verbose=True,
                    name='default', grid_len=20, export_projections=False, export_short_arcs=False,
                    return_options=False, normalize=True):
@@ -116,8 +117,13 @@ def main_algorithm(sdf_points, sdf_values, *,
     interp_overlap: PU patch overlap.
     pair_local: PU: pair each local RBF solve with missing input/projection partners.
     pu_dedup_tol: PU: constraints closer than this are merged before the local fits.
+    pu_dedup_mode: PU: 'greedy' (fixed radius pu_dedup_tol only) or 'adaptive'
+        (first merge clusters of tangent points whose spacing is below pu_dedup_ratio
+        times the spacing of their samples, then apply pu_dedup_tol).
+    pu_dedup_ratio: PU adaptive dedup contraction ratio.
     iter_gradient_finding: 'optimize' or 'sample'.
-    grad_optimizer: solver behind 'optimize': 'bfgs' (batched BFGS), 'ascent'
+    grad_optimizer: solver behind 'optimize': 'bfgs' (batched BFGS), 'newton' (batched
+        Riemannian Newton; PU interpolator only), 'ascent'
         (fixed-step projected gradient ascent) or 'lbfgspp' (one LBFGS++ solve per point).
     lr: step size for 'ascent'.
     optim_steps: optimizer steps per point in each outer iteration.
@@ -151,6 +157,8 @@ def main_algorithm(sdf_points, sdf_values, *,
     opts.interp_overlap = interp_overlap
     opts.pair_local = pair_local
     opts.pu_dedup_tol = pu_dedup_tol
+    opts.pu_dedup_mode = pu_dedup_mode
+    opts.pu_dedup_ratio = pu_dedup_ratio
     opts.iter_gradient_finding = iter_gradient_finding
     opts.grad_optimizer = grad_optimizer
     opts.lr = lr

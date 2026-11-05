@@ -4,6 +4,7 @@
 #include <string>
 #include <memory>
 #include <vector>
+#include <stdexcept>
 
 namespace sdf {
 
@@ -43,6 +44,16 @@ public:
         grads  = predict_gradients(x_new, chunk_size);
     }
 
+    /// Value, gradient and row-major Hessian (M, 9) at the query points. Only
+    /// interpolators that implement it support grad_optimizer "newton".
+    virtual void predict_with_hessians(const Eigen::MatrixXd& x_new,
+                                       Eigen::VectorXd& values,
+                                       Eigen::MatrixXd& grads,
+                                       Eigen::MatrixXd& hessians) const {
+        (void)x_new; (void)values; (void)grads; (void)hessians;
+        throw std::runtime_error("predict_with_hessians is not implemented for this interpolator");
+    }
+
     virtual bool is_trained() const = 0;
 
     /// Toggle stdout logging in fit() / extract_surface(). Default: true.
@@ -80,6 +91,10 @@ public:
         /// Parallel over points, but the RBF is evaluated one point at a time.
         /// Requires SDF_HAVE_LBFGSPP; throws otherwise.
         LBFGSpp,
+        /// Riemannian Newton on S^2 with an eigenvalue-modified (positive
+        /// definite) Hessian and the same lockstep Armijo scheme as
+        /// BatchedBFGS; one batched predict_with_hessians() per round.
+        BatchedNewton,
         /// The original solver: projected gradient ascent on ⟨∇D̃(q), g⟩ with
         /// a fixed step size and no line search. One batched
         /// predict_gradients() per step, so it is the cheapest per step but

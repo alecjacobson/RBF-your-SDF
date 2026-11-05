@@ -61,10 +61,12 @@ Eigen::MatrixXd iterative_projection_3d(
                 method = Interpolator::GradOpt::LBFGSpp;
             else if (options.grad_optimizer == "ascent")
                 method = Interpolator::GradOpt::GradientAscent;
+            else if (options.grad_optimizer == "newton")
+                method = Interpolator::GradOpt::BatchedNewton;
             else
                 throw std::runtime_error(
                     "unknown grad_optimizer '" + options.grad_optimizer +
-                    "' (expected \"ascent\", \"bfgs\" or \"lbfgspp\")");
+                    "' (expected \"ascent\", \"bfgs\", \"newton\" or \"lbfgspp\")");
             new_gradients = interpolator.optimize_best_gradients(
                 points, values, num_coarse, optim_steps, lr, &gradients,
                 /*chunk_size=*/200, &frozen, method);

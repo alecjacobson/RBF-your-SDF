@@ -5,6 +5,8 @@
 #include "kdtree.h"
 #include <memory>
 #include <mutex>
+#include <stdexcept>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -79,6 +81,17 @@ public:
     /// Constraints closer than this are merged before fitting (default 5e-4).
     void set_dedup_tol(double tol) { dedup_tol_ = tol; }
     double dedup_tol() const { return dedup_tol_; }
+    /// "greedy" (default): fixed-radius dedup only. "adaptive": first merge
+    /// tangent points whose separation is below `ratio` times the separation
+    /// of their samples (see merge_tangent_clusters), then apply dedup_tol.
+    void set_dedup_mode(const std::string& mode, double ratio = 0.01) {
+        if (mode != "greedy" && mode != "adaptive")
+            throw std::invalid_argument("dedup mode must be 'greedy' or 'adaptive'");
+        dedup_mode_ = mode;
+        dedup_ratio_ = ratio;
+    }
+    const std::string& dedup_mode() const { return dedup_mode_; }
+    double dedup_ratio() const { return dedup_ratio_; }
     double overlap() const { return overlap_; }
     /// Patch indices whose support contains pt (same rule as the evaluator).
     std::vector<int> patches_containing(const Eigen::Vector3d& pt) const {
@@ -92,7 +105,21 @@ public:
         Eigen::VectorXd rho, W_min, F0_lo, F0_hi, L_best, L_local, L_B0;
         long long cost_terms = 0;
     };
-    BoxCertificates certify_boxes(const Eigen::MatrixXd& lo, const Eigen::MatrixXd& hi) const;
+    /// With hull_only, only status, W_min and hull_sign are computed (the
+    /// convex-hull sign test); Lipschitz bounds and center values stay +-inf.
+    BoxCertificates certify_boxes(const Eigen::MatrixXd& lo, const Eigen::MatrixXd& hi,
+                                  bool hull_only = false) const;
+
+    /// Value, gradient and Hessian of the blended field at each query point
+    /// (sphere partition only; the box partition throws). Hessians are
+    /// returned row-major as (M, 9). Uncovered points use the nearest-support
+    /// patch, matching predict().
+    void predict_hessians(const Eigen::MatrixXd& x, Eigen::VectorXd& values,
+                          Eigen::MatrixXd& grads, Eigen::MatrixXd& hessians) const;
+    void predict_with_hessians(const Eigen::MatrixXd& x, Eigen::VectorXd& values,
+                               Eigen::MatrixXd& grads, Eigen::MatrixXd& hessians) const override {
+        predict_hessians(x, values, grads, hessians);
+    }
 
     /// Fallback patch used when no support contains pt.
     int nearest_patch(const Eigen::Vector3d& pt) const { return query_nearest_patch(pt); }
@@ -152,6 +179,11 @@ private:
     std::vector<double> patch_aabb_lo_, patch_aabb_hi_;  // flat 3*np
     double reg_ = 0;
     double dedup_tol_ = 5e-4;
+    std::string dedup_mode_ = "greedy";
+    double dedup_ratio_ = 0.01;
+    static void merge_tangent_clusters(Eigen::MatrixXd& pts, Eigen::VectorXd& vals,
+                                       std::vector<int>& partner, int N,
+                                       double ratio, bool verbose);
 
     // Box-independent certified constants per patch, built lazily by
     // certify_boxes and invalidated by fit().

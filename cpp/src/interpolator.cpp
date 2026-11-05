@@ -483,6 +483,103 @@ Eigen::MatrixXd Interpolator::optimize_best_gradients(
         return dirs;
     }
 
+    // ── Riemannian Newton on S² ─────────────────────────────────────
+    // Same objective, retraction, lockstep Armijo backtracking and stopping
+    // rule as the BFGS below; only the search direction differs. With
+    // f(x) = D̃(z − σx)/σ the Euclidean derivatives are ∇f = −∇D̃(q) and
+    // ∇²f = σ∇²D̃(q); on S² the Riemannian Hessian is P∇²f P − (xᵀ∇f)P. Its
+    // restriction to the tangent plane (2×2) is made positive definite by
+    // taking |λ| floored at 1e-3·max|λ| (modified Newton), so p = −H⁻¹g is a
+    // descent direction. One batched predict_with_hessians() per round.
+    if (method == GradOpt::BatchedNewton) {
+        constexpr double kGradTolN = 1e-4, kC1 = 1e-4, kMaxStepN = 1.0;
+        constexpr int kMaxBTN = 8;
+        Eigen::VectorXd isig(N);
+        std::vector<int> act;
+        for (int i = 0; i < N; i++) {
+            isig(i) = std::abs(sdf_values(i)) > 1e-12 ? 1.0 / sdf_values(i) : 0.0;
+            if (isig(i) != 0.0) act.push_back(i);
+        }
+        Eigen::MatrixXd& xk = dirs;
+        Eigen::MatrixXd xt = dirs, pk(N, 3), gk(N, 3);
+        Eigen::VectorXd fk(N), gTp(N), alpha(N);
+        std::vector<unsigned char> nbt(N, 0);
+        std::vector<char> keep(N, 0), sd(N, 0);
+        auto direction = [&](int i, const Eigen::Vector3d& x, const Eigen::Vector3d& g,
+                             const Eigen::Vector3d& G, const Eigen::Matrix3d& Hf, double cap) {
+            Eigen::Vector3d a = std::abs(x(0)) < 0.9 ? Eigen::Vector3d::UnitX() : Eigen::Vector3d::UnitY();
+            Eigen::Vector3d e1 = (a - a.dot(x) * x).normalized(), e2 = x.cross(e1);
+            const double xg = x.dot(G);
+            Eigen::Matrix2d H2;
+            H2(0, 0) = e1.dot(Hf * e1) - xg; H2(1, 1) = e2.dot(Hf * e2) - xg;
+            H2(0, 1) = H2(1, 0) = 0.5 * (e1.dot(Hf * e2) + e2.dot(Hf * e1));
+            Eigen::SelfAdjointEigenSolver<Eigen::Matrix2d> es(H2);
+            Eigen::Vector2d w = es.eigenvalues().cwiseAbs();
+            const double floor_ = std::max(1e-3 * w.maxCoeff(), 1e-12);
+            w = w.cwiseMax(floor_);
+            Eigen::Vector2d g2(e1.dot(g), e2.dot(g));
+            Eigen::Vector2d s2 = -(es.eigenvectors() * (es.eigenvectors().transpose() * g2).cwiseQuotient(w));
+            Eigen::Vector3d p = s2(0) * e1 + s2(1) * e2;
+            bool steepest = false;
+            if (!(p.dot(g) < 0.0) || !p.allFinite()) { p = -g; steepest = true; }
+            const double pn = p.norm();
+            if (!(pn > 0.0)) return false;
+            pk.row(i) = p.transpose();
+            gTp(i) = p.dot(g);
+            alpha(i) = std::min(1.0, cap / pn);
+            nbt[i] = 0;
+            sd[i] = steepest;
+            return true;
+        };
+        for (int step = 0; step < optim_steps && !act.empty(); step++) {
+            const int M = (int)act.size();
+            Eigen::MatrixXd Q(M, 3);
+            #pragma omp parallel for schedule(static)
+            for (int ai = 0; ai < M; ai++)
+                Q.row(ai) = points.row(act[ai]) - sdf_values(act[ai]) * xt.row(act[ai]);
+            auto _te = std::chrono::steady_clock::now();
+            Eigen::VectorXd val; Eigen::MatrixXd grd, hes;
+            predict_with_hessians(Q, val, grd, hes);
+            g_rbf_eval_s += std::chrono::duration<double>(std::chrono::steady_clock::now() - _te).count();
+            const double cap = (step == 0) ? lr : kMaxStepN;
+            #pragma omp parallel for schedule(static)
+            for (int ai = 0; ai < M; ai++) {
+                const int i = act[ai];
+                keep[i] = 1;
+                const double f1 = val(ai) * isig(i);
+                if (step > 0 && !(f1 <= fk(i) + kC1 * alpha(i) * gTp(i))) {
+                    if (++nbt[i] < kMaxBTN) {
+                        alpha(i) *= 0.5;
+                    } else if (!sd[i]) {
+                        // Newton direction failed: steepest descent from x_k.
+                        Eigen::Vector3d g = gk.row(i).transpose();
+                        pk.row(i) = -g.transpose(); gTp(i) = -g.squaredNorm();
+                        alpha(i) = std::min(1.0, cap / g.norm()); nbt[i] = 0; sd[i] = 1;
+                    } else { keep[i] = 0; continue; }
+                    Eigen::RowVector3d x = xk.row(i) + alpha(i) * pk.row(i);
+                    xt.row(i) = x / x.norm();
+                    continue;
+                }
+                const Eigen::Vector3d x = xt.row(i).transpose();
+                const Eigen::Vector3d G = -grd.row(ai).transpose();
+                Eigen::Matrix3d Hf;
+                for (int k = 0; k < 3; k++) for (int l = 0; l < 3; l++) Hf(k, l) = hes(ai, 3 * k + l);
+                Hf *= sdf_values(i);
+                const Eigen::Vector3d g = G - G.dot(x) * x;
+                if (!g.allFinite()) { keep[i] = 0; continue; }
+                xk.row(i) = x.transpose(); fk(i) = f1; gk.row(i) = g.transpose();
+                if (g.norm() <= kGradTolN || !direction(i, x, g, G, Hf, cap)) { keep[i] = 0; continue; }
+                Eigen::RowVector3d xn = xk.row(i) + alpha(i) * pk.row(i);
+                xt.row(i) = xn / xn.norm();
+            }
+            std::vector<int> nxt;
+            for (int ai = 0; ai < M; ai++) if (keep[act[ai]]) nxt.push_back(act[ai]);
+            act.swap(nxt);
+        }
+        restore_threads(_saved);
+        return dirs;
+    }
+
     // ── Riemannian BFGS on S² ───────────────────────────────────────
     // Names follow Nocedal & Wright ch. 6 so this reads against the book:
     // x_k is the iterate, p_k the search direction, α the step length,

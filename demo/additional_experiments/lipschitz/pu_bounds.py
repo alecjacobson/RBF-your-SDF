@@ -481,12 +481,13 @@ class NativeCertifier:
     the Python runs; ``L_best`` there equals the Python ``L_pu``.
     """
 
-    def __init__(self, native):
+    def __init__(self, native, hull_only=False):
         self.native = native
+        self.hull_only = hull_only
 
     def certify(self, lo, hi, variants=True):
         d = self.native.certify_boxes(np.ascontiguousarray(lo, dtype=np.float64),
-                                      np.ascontiguousarray(hi, dtype=np.float64))
+                                      np.ascontiguousarray(hi, dtype=np.float64), self.hull_only)
         out = {k: np.asarray(v) for k, v in d.items() if k != 'cost_bound_terms'}
         out['status'] = out['status'].astype(np.int8)
         out['hull_sign'] = out['hull_sign'].astype(np.int8)
