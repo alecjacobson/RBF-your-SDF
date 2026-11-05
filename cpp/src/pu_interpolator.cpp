@@ -111,7 +111,9 @@ void PUInterpolator::deduplicate(Eigen::MatrixXd& points, Eigen::VectorXd& value
 
     // Shared greedy spatial dedup (non-zero values survive over zero-valued
     // projection duplicates). PU additionally remaps `partner` below.
-    std::vector<int> kept = dedup_keep_indices(points, values, tol);
+    // In adaptive mode the fixed radius is a floor for tangent points only:
+    // input samples carry the data and are never dropped.
+    std::vector<int> kept = dedup_keep_indices(points, values, tol, dedup_mode_ == "adaptive");
 
     Eigen::MatrixXd new_pts(kept.size(), points.cols());
     Eigen::VectorXd new_vals(kept.size());

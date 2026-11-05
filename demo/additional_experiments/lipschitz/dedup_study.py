@@ -42,6 +42,8 @@ CONFIGS = {
     'adaptive 0.01': dict(pu_dedup_mode='adaptive', pu_dedup_ratio=0.01, pu_dedup_tol=5e-4),
     'adaptive 0.03': dict(pu_dedup_mode='adaptive', pu_dedup_ratio=0.03, pu_dedup_tol=5e-4),
     'reg 1e-6 (reference)': dict(pu_dedup_mode='greedy', pu_dedup_tol=5e-4, reg=1e-6),
+    'adaptive 0.01 + 2e-3 tangent floor': dict(pu_dedup_mode='adaptive', pu_dedup_ratio=0.01, pu_dedup_tol=2e-3),
+    'adaptive 0.01 + 5e-3 tangent floor': dict(pu_dedup_mode='adaptive', pu_dedup_ratio=0.01, pu_dedup_tol=5e-3),
 }
 DEPTHS = (4, 5, 6)          # 64^3, 128^3, 256^3 leaves from a 4^3 root
 INPUTS = [('bunny', 30, False), ('fandisk', 30, False), ('bunny', 30, True), ('box', 24, False),

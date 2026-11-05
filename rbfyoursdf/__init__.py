@@ -117,9 +117,10 @@ def main_algorithm(sdf_points, sdf_values, *,
     interp_overlap: PU patch overlap.
     pair_local: PU: pair each local RBF solve with missing input/projection partners.
     pu_dedup_tol: PU: constraints closer than this are merged before the local fits.
-    pu_dedup_mode: PU: 'greedy' (fixed radius pu_dedup_tol only) or 'adaptive'
-        (first merge clusters of tangent points whose spacing is below pu_dedup_ratio
-        times the spacing of their samples, then apply pu_dedup_tol).
+    pu_dedup_mode: PU: 'greedy' (fixed radius pu_dedup_tol over all constraints) or
+        'adaptive' (first merge clusters of tangent points whose spacing is below
+        pu_dedup_ratio times the spacing of their samples, then apply pu_dedup_tol to
+        tangent points only, so input samples are never dropped).
     pu_dedup_ratio: PU adaptive dedup contraction ratio.
     iter_gradient_finding: 'optimize' or 'sample'.
     grad_optimizer: solver behind 'optimize': 'bfgs' (batched BFGS), 'newton' (batched

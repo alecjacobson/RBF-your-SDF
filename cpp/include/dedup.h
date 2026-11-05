@@ -19,9 +19,13 @@ namespace sdf {
 /// points are processed first so they survive over zero-valued duplicates
 /// (projection points carry value 0 and are less trustworthy). Returns the
 /// ascending indices of the surviving rows.
+///
+/// With `protect_nonzero`, only zero-valued points (tangent points) are ever
+/// removed: input samples always survive, even when closer than `tol`.
 inline std::vector<int> dedup_keep_indices(const Eigen::MatrixXd& points,
                                            const Eigen::VectorXd& values,
-                                           double tol) {
+                                           double tol,
+                                           bool protect_nonzero = false) {
     int n = (int)points.rows();
     std::vector<int> kept;
     if (n == 0) return kept;
@@ -41,7 +45,7 @@ inline std::vector<int> dedup_keep_indices(const Eigen::MatrixXd& points,
         if (!keep[i]) continue;
         Eigen::Vector3d pt = points.row(i);
         for (int j : tree.query_ball_point(pt, tol))
-            if (j != i && keep[j]) keep[j] = false;
+            if (j != i && keep[j] && !(protect_nonzero && values(j) != 0.0)) keep[j] = false;
     }
 
     kept.reserve(n);
