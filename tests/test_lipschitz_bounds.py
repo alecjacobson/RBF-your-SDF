@@ -175,7 +175,7 @@ class TestBlendBounds(unittest.TestCase):
         _, g = pu_evaluate(snap, pts)
         obs = np.linalg.norm(g, axis=1).max()
         self.assertGreater(obs, 0.5)
-        for name in ('L_best', 'L_B0', 'L_simple'):
+        for name in ('L_best', 'L_pu', 'L_interval', 'L_B0', 'L_simple'):
             self.assertGreaterEqual(out[name][0], obs)
 
     def test_identical_patches_cancel_blend_term(self):
@@ -247,7 +247,7 @@ class TestBlendBounds(unittest.TestCase):
                 pts = sample_box(lo[i], hi[i], 400, rng)
                 F, g = pu_evaluate(snap, pts)
                 obs = np.linalg.norm(g, axis=1).max()
-                for name in ('L_best', 'L_B0', 'L_simple'):
+                for name in ('L_best', 'L_pu', 'L_interval', 'L_B0', 'L_simple'):
                     self.assertGreaterEqual(out[name][i], obs)
                 F0, _ = pu_evaluate(snap, (0.5 * (lo[i] + hi[i]))[None])
                 self.assertLessEqual(out['F0_lo'][i], F0[0])

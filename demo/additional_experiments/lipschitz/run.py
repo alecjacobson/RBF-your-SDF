@@ -36,7 +36,7 @@ from lipschitz.bounds import (fit_constants, b0_cert, b2_cert, b3_cert, b0_estim
 from lipschitz import pu_bounds as pub                                 # noqa: E402
 from lipschitz.certify import (regular_cells, adaptive_prune, corner_points,  # noqa: E402
                                sign_change_violations, METHODS)
-from lipschitz.inputs import make_input, REPO                          # noqa: E402
+from lipschitz.inputs import make_input, surface_points, REPO                          # noqa: E402
 
 RESULTS = Path(__file__).resolve().parents[1] / 'results' / 'lipschitz'
 
@@ -99,12 +99,13 @@ def manifest(args, desc, snap, t_fit):
 
 # ── stage 1 ─────────────────────────────────────────────────────────
 
-def fit(name, n, max_iters):
+def fit(name, n, max_iters, fit_kwargs=None):
     import rbfyoursdf
     pts, vals, desc = make_input(name, n)
     t = time.perf_counter()
-    res = rbfyoursdf.main_algorithm(pts, vals, max_iters=max_iters, verbose=False)
+    res = rbfyoursdf.main_algorithm(pts, vals, max_iters=max_iters, verbose=False, **(fit_kwargs or {}))
     t_fit = time.perf_counter() - t
+    desc = dict(desc, fit_kwargs=fit_kwargs or {})
     snap = snapshot_from_native(res.interpolator, meta=desc)
     native = res.interpolator.interpolator           # normalized frame
     lo = (pts.min(0) - snap.transform_center) / snap.transform_scale
@@ -292,8 +293,11 @@ def grid_study(snap, cert, native, dom, n, rng, subset=None, n_opt=60):
            'zero_observed': int((obs == 0).sum())}
     ok = (st != pub.UNRESOLVED) & (obs > 0)
     res['ratio'] = {k: quantiles(out[k][ok] / obs[ok]) for k in
-                    ('L_best', 'L_simple', 'L_B0', 'L_local_only', 'L_local_B0', 'L_local_B2', 'L_local_B3')}
-    res['violations'] = {k: int((out[k][ok] < obs[ok]).sum()) for k in ('L_best', 'L_simple', 'L_B0')}
+                    ('L_best', 'L_pu', 'L_interval', 'L_simple', 'L_B0', 'L_local_only', 'L_local_B0',
+                     'L_local_B2', 'L_local_B3')}
+    res['violations'] = {k: int((out[k][ok] < obs[ok]).sum())
+                         for k in ('L_best', 'L_pu', 'L_interval', 'L_simple', 'L_B0')}
+    res['interval_wins_fraction'] = float((out['L_interval'][ok] < out['L_pu'][ok]).mean()) if ok.any() else None
     res['local_only_below_observed'] = int((out['L_local_only'][ok] < obs[ok]).sum())
     cert_ok = st == pub.CERTIFIED
     res['blend_share_best'] = quantiles(out['blend_best'][cert_ok] /
@@ -411,6 +415,18 @@ def transition_probes(snap, native, dom, rng, n=200_000):
 
 # ── stage 6 ─────────────────────────────────────────────────────────
 
+def kernel_terms(snap, pts):
+    """Kernel terms the blend evaluator spends on pts: sum over containing patches of their center counts."""
+    from scipy.spatial import cKDTree
+    if len(pts) == 0:
+        return 0
+    tree = cKDTree(pts)
+    total = 0
+    for j, f in enumerate(snap.fits):
+        total += len(tree.query_ball_point(snap.patch_centers[j], snap.patch_radii[j])) * len(f.centers)
+    return int(total)
+
+
 def prune_study(snap, cert, native, dom, root_n, depth, rng, reps=3):
     lo, hi = dom
     leaf_n = np.array([root_n * 2 ** depth] * 3)
@@ -418,7 +434,8 @@ def prune_study(snap, cert, native, dom, root_n, depth, rng, reps=3):
     t_full = timed(lambda: native.predict(allpts), reps=reps)
     ref_vals = native.predict(allpts)
     res = {'leaf_n': leaf_n, 'root_n': root_n, 'depth': depth,
-           'baseline': {'field_evaluations': int(len(allpts)), 'seconds': t_full}}
+           'baseline': {'field_evaluations': int(len(allpts)), 'seconds': t_full,
+                        'kernel_terms': kernel_terms(snap, allpts)}}
     cache = {}
     for method in METHODS:
         pr = adaptive_prune(cert, lo, hi, root_n, depth, method, cache=cache)
@@ -445,6 +462,7 @@ def prune_study(snap, cert, native, dom, root_n, depth, rng, reps=3):
             'evaluations_saved_fraction': 1 - len(pts) / len(allpts),
             'boxes_certified': pr.n_boxes_certified,
             'bound_kernel_terms': int(pr.cost_bound_terms),
+            'eval_kernel_terms': kernel_terms(snap, pts),
             'certify_seconds': pr.time_certify,
             'eval_seconds': t_eval,
             'total_seconds': pr.time_certify + t_eval,
@@ -472,18 +490,28 @@ def main(argv=None):
     ap.add_argument('--prune-depth', type=int, default=4)
     ap.add_argument('--seed', type=int, default=0)
     ap.add_argument('--skip', nargs='*', default=[])
+    ap.add_argument('--reg', type=float, default=None,
+                    help='fit variant: RBF regularization (baseline: package default 0)')
+    ap.add_argument('--dedup-tol', type=float, default=None,
+                    help='fit variant: PU dedup tolerance (baseline: 5e-4)')
     ap.add_argument('--expand', type=float, default=0.0,
                     help='expand the query domain by this fraction per side (extrapolation stress)')
     args = ap.parse_args(argv)
     rng = np.random.default_rng(args.seed)
-    tag = f'{args.input}_{args.grid}' + (f'_expand{args.expand}' if args.expand else '')
+    fit_kwargs = {}
+    if args.reg is not None:
+        fit_kwargs['reg'] = args.reg
+    if args.dedup_tol is not None:
+        fit_kwargs['pu_dedup_tol'] = args.dedup_tol
+    tag = (f'{args.input}_{args.grid}' + ''.join(f'_{k}{v:g}' for k, v in fit_kwargs.items())
+           + (f'_expand{args.expand}' if args.expand else ''))
     RESULTS_DIR = RESULTS / tag
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
     def log(*a):
         print(f'[{tag} {time.strftime("%H:%M:%S")}]', *a, flush=True)
 
-    snap, native, dom, samples, t_fit = fit(args.input, args.grid, args.max_iters)
+    snap, native, dom, samples, t_fit = fit(args.input, args.grid, args.max_iters, fit_kwargs)
     if args.expand:
         ext = (dom[1] - dom[0]) * args.expand
         dom = (dom[0] - ext, dom[1] + ext)
@@ -506,6 +534,10 @@ def main(argv=None):
     rows, summ, interp = patch_diagnostics(snap, cert, samples)
     out['patches'] = summ
     out['interpolation'] = interp
+    sp = surface_points(args.input)
+    Fs = native.predict((sp - snap.transform_center) / snap.transform_scale) * snap.transform_scale
+    out['quality'] = {'abs_F_on_true_surface': quantiles(np.abs(Fs)),
+                      'note': '|F| at true-surface samples, physical units (~ distance to the zero set)'}
     (RESULTS_DIR / 'patches.json').write_text(json.dumps(jsonable(rows)))
     if 'local' not in args.skip:
         out['local_bounds'] = local_bound_study(snap, cert, dom, rng)

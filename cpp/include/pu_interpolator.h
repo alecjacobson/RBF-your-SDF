@@ -73,6 +73,9 @@ public:
     const Eigen::Vector3d& patch_half_ext(int p) const { return patches_.at(p).half_ext; }
     const DuchonInterpolator& patch_fit(int p) const { return *patches_.at(p).interp; }
     bool uses_box_partition() const { return use_box_; }
+    /// Constraints closer than this are merged before fitting (default 5e-4).
+    void set_dedup_tol(double tol) { dedup_tol_ = tol; }
+    double dedup_tol() const { return dedup_tol_; }
     double overlap() const { return overlap_; }
     /// Patch indices whose support contains pt (same rule as the evaluator).
     std::vector<int> patches_containing(const Eigen::Vector3d& pt) const {
@@ -135,6 +138,7 @@ private:
     std::vector<int> patch_bvh_leaves_;
     std::vector<double> patch_aabb_lo_, patch_aabb_hi_;  // flat 3*np
     double reg_ = 0;
+    double dedup_tol_ = 5e-4;
 
     void build_patch_bvh();
     void query_patches_containing(

@@ -37,6 +37,7 @@ PYBIND11_MODULE(rbfyoursdf_cpp, m) {
         .def_readwrite("interp_partition", &sdf::Options::interp_partition)
         .def_readwrite("interp_overlap", &sdf::Options::interp_overlap)
         .def_readwrite("pair_local", &sdf::Options::pair_local)
+        .def_readwrite("pu_dedup_tol", &sdf::Options::pu_dedup_tol)
         .def_readwrite("tolerance", &sdf::Options::tolerance)
         .def_readwrite("gt_gradients", &sdf::Options::gt_gradients)
         .def_readwrite("iter_gradient_finding", &sdf::Options::iter_gradient_finding)
@@ -188,6 +189,7 @@ PYBIND11_MODULE(rbfyoursdf_cpp, m) {
             policy["denominator_rule"] = "blend if W > 0 else nearest-support patch raw fit";
             policy["nearest_metric"] = "max(|x-c|-R,0) (sphere) / AABB distance (box)";
             policy["overlap"] = self.overlap();
+            policy["dedup_tol"] = self.dedup_tol();
             py::dict out;
             out["version"] = 1;
             out["type"] = "PUInterpolator";

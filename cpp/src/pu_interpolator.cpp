@@ -542,7 +542,7 @@ void PUInterpolator::fit(const Eigen::MatrixXd& points,
     }
 
     // Deduplicate
-    deduplicate(pts, vals, 5e-4, &partner);
+    deduplicate(pts, vals, dedup_tol_, &partner);
     if (vals.size() > 5000 && verbose_) {
         std::cout << "  [PU fit] Warning: too many points, only keeping " << pts.rows()
                   << " points with abs(value) < " << dist_threshold_ << " for fitting.\n";

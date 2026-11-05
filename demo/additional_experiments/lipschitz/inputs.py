@@ -63,3 +63,25 @@ def make_input(name, n, seed=1):
     _, pts, vals, _ = sdf3d.generate_test_mesh_data(str(mesh_path), name, grid_len=n)
     return pts, vals, {'kind': 'mesh', 'name': name, 'grid': n, 'path': str(mesh_path.relative_to(REPO)),
                        'exact_sdf': True, 'sampling': 'demo/SDF_to_surface_3D.generate_test_mesh_data'}
+
+
+def surface_points(name, n=20000, seed=2):
+    """Points on the true zero set, in the same physical frame as make_input."""
+    rng = np.random.default_rng(seed)
+    if name in ANALYTIC:
+        f = ANALYTIC[name]
+        p = rng.uniform(-0.5, 0.5, (4 * n, 3))
+        h = 1e-6
+        for _ in range(30):                 # Newton-like projection along the SDF gradient
+            d = f(p)
+            g = np.stack([(f(p + h * e) - f(p - h * e)) / (2 * h) for e in np.eye(3)], 1)
+            p = p - d[:, None] * g / np.maximum((g * g).sum(1, keepdims=True), 1e-12)
+        ok = np.abs(f(p)) < 1e-9
+        return p[ok][:n]
+    import trimesh
+    mesh = trimesh.load(REPO / 'examples' / f'{name}.obj')
+    lo, hi = mesh.vertices.min(0), mesh.vertices.max(0)
+    mesh.vertices -= (lo + hi) / 2               # same normalization as the demo driver
+    mesh.vertices /= np.max(hi - lo)
+    pts, _ = trimesh.sample.sample_surface(mesh, n, seed=seed)
+    return np.asarray(pts)

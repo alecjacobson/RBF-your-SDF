@@ -212,8 +212,10 @@ class PUCertifier:
 
         Returns:
             dict of per-box arrays: ``status``, ``rho``, ``W_min``, ``n_active``,
-            gradient bounds ``L_best`` (valid minimum with disagreement
-            refinement), ``L_B0`` (B0 propagated through the blend bound),
+            gradient bounds ``L_best`` (minimum of ``L_pu`` and
+            ``L_interval``), ``L_pu`` (blend formula with disagreement
+            refinement), ``L_interval`` (direct interval evaluation of the
+            quotient derivative), ``L_B0`` (B0 propagated through the blend bound),
             ``L_simple`` (minimum local bounds with the simple disagreement
             bound), the deliberately incomplete diagnostic ``L_local_only``,
             the blend contributions, the center value enclosure ``F0`` and
@@ -226,7 +228,7 @@ class PUCertifier:
         m = len(lo)
         x0, rho, b, p, dmin, dmax = self.active_pairs(lo, hi)
         npair = len(b)
-        out = {k: np.zeros(m) for k in ('W_min', 'L_best', 'L_B0', 'L_simple', 'L_local_only',
+        out = {k: np.zeros(m) for k in ('W_min', 'W_max', 'L_best', 'L_pu', 'L_interval', 'L_B0', 'L_simple', 'L_local_only',
                                          'blend_best', 'blend_B0', 'blend_simple', 'L_B1_ideal',
                                          'L_local_B0', 'L_local_B2', 'L_local_B3')}
         out['rho'] = rho
@@ -292,10 +294,14 @@ class PUCertifier:
             # center value enclosure F(x0): weights at x0
             self._center_values(x0, b, p, f0, bstart, boxes, nmax, out)
             self._blend_terms(b, p, rho, f0, gpair, Hpair, B0, Lmin, vr, Gp, bstart, out)
+            self._interval_quotient(b, p, rho, gpair, gn, Hn, A_p, vr, Gp, psi_lo, dmin, bstart,
+                                    boxes, nmax, out)
 
         covered = out['W_min'] > 0
         out['status'][covered] = CERTIFIED
-        out['L_best'] = np.where(covered, iv.up(out['L_local_only'] + out['blend_best']), np.inf)
+        out['L_pu'] = np.where(covered, iv.up(out['L_local_only'] + out['blend_best']), np.inf)
+        out['L_interval'] = np.where(covered, out['L_interval'], np.inf)
+        out['L_best'] = np.minimum(out['L_pu'], out['L_interval'])
         out['L_B0'] = np.where(covered, iv.up(out['L_local_B0'] + out['blend_B0']), np.inf)
         out['L_simple'] = np.where(covered, iv.up(out['L_local_only'] + out['blend_simple']), np.inf)
         out['hull_sign'][~covered] = 0
@@ -321,6 +327,8 @@ class PUCertifier:
                 Lm = np.minimum(np.minimum(L0, L2), L3)
                 out['status'][sel] = FALLBACK_FIXED
                 out['L_best'][sel] = Lm
+                out['L_pu'][sel] = Lm
+                out['L_interval'][sel] = Lm
                 out['L_simple'][sel] = Lm
                 out['L_local_only'][sel] = Lm
                 out['L_B0'][sel] = L0
@@ -329,6 +337,45 @@ class PUCertifier:
                 out['hull_sign'][sel] = (lo_r > 0).astype(np.int8) - (hi_r < 0).astype(np.int8)
         out['cost_bound_terms'] = cost
         return out
+
+    def _interval_quotient(self, b, p, rho, gpair, gn, Hn, A_p, vr, Gp, psi_lo, dmin, bstart,
+                           boxes, nmax, out):
+        """Direct interval evaluation of grad F = (sum v grad f + sum (f - F) grad v) / W.
+
+        Every factor is replaced by its enclosure over the whole box, so the
+        result suffers from interval dependency (the same v, f and F appear in
+        numerator and denominator); it is reported as an independent comparison.
+        """
+        rp = rho[b]
+        Rp = self.R[p]
+        # gradient of f_j anywhere in the box: g(x0) +- rho (|H(x0)| + 3 A rho)
+        dev = iv.up(rp * iv.up(Hn + iv.up(3.0 * iv.up(A_p * rp))))
+        t_lo = np.maximum(iv.down(dmin / Rp), 0.0)
+        v_hi = psi_upper_at(t_lo)
+        v = (psi_lo, v_hi)
+        W_max = _segment_sum(v_hi, bstart, nmax, lower=False)
+        out['W_max'][boxes] = W_max
+        Fl = np.minimum.reduceat(vr[0], bstart)
+        Fh = np.maximum.reduceat(vr[1], bstart)
+        nb = np.repeat(np.arange(len(bstart)), np.diff(np.append(bstart, len(b))))
+        diff_mag = iv.mag(iv.sub(vr, (Fl[nb], Fh[nb])))
+        t2 = iv.up(Gp * diff_mag)                          # |(f_j - F) d v_j / dx_k| <= G_j |f_j - F|
+        t2sum = _segment_sum(t2, bstart, nmax, lower=False)
+        comps = []
+        Wm = out['W_min'][boxes]
+        for k in range(3):
+            gk = (iv.down(gpair[k][0] - dev), iv.up(gpair[k][1] + dev))
+            prod = iv.mul(v, gk)
+            n_lo = iv.down(_segment_sum(prod[0], bstart, nmax, lower=True) - t2sum)
+            n_hi = iv.up(_segment_sum(prod[1], bstart, nmax, lower=False) + t2sum)
+            pos = Wm > 0
+            q_lo = np.full(len(boxes), -np.inf); q_hi = np.full(len(boxes), np.inf)
+            if pos.any():
+                q = iv.div((n_lo[pos], n_hi[pos]), (Wm[pos], W_max[pos]))
+                q_lo[pos], q_hi[pos] = q
+            comps.append((q_lo, q_hi))
+        with np.errstate(invalid='ignore', over='ignore'):
+            out['L_interval'][boxes] = iv.norm_upper(comps)
 
     def _center_values(self, x0, b, p, f0, bstart, boxes, nmax, out):
         """Enclose F(x0) for boxes with W(x0) > 0 (convex hull intersected with the quotient)."""
