@@ -25,7 +25,9 @@ STATUS_COLORS = {'rejected': '#1baf7a', 'retained': '#d9d8d3', 'unresolved': '#e
 def load_runs(root=RESULTS):
     runs = {}
     for p in sorted(root.glob('*/results.json')):
-        runs[p.parent.name] = json.loads(p.read_text())
+        r = json.loads(p.read_text())
+        if 'prune' in r:                    # only completed runs
+            runs[p.parent.name] = r
     return runs
 
 
@@ -49,6 +51,13 @@ def style(ax):
     for s in ('left', 'bottom'):
         ax.spines[s].set_color(INK2)
     ax.tick_params(colors=INK2, labelsize=8)
+
+
+def breakeven(p, v):
+    b = p['baseline'].get('kernel_terms')
+    if b is None or 'eval_kernel_terms' not in v or not v['bound_kernel_terms']:
+        return None
+    return (b - v['eval_kernel_terms']) / v['bound_kernel_terms']
 
 
 def tables(runs):
@@ -113,8 +122,12 @@ def tables(runs):
         desc = '; '.join(f'{kk}: {c}, {fnum(m)}' for kk, (c, m) in kinds.items()) or 'none found'
         out.append(f"| {k} | {fnum(t['fallback_volume_fraction'])} | {desc} |")
     out.append('\n### Conservative cell rejection (same octree, same leaf resolution)\n')
-    out.append('| run | leaves | method | rejected | unresolved | field evals saved | bound kernel terms | certify s | eval s | total s | unpruned s | violations (edges / probes) |')
-    out.append('|---|---|---|---|---|---|---|---|---|---|---|---|')
+    out.append('Break-even = (unpruned kernel terms - pruned evaluation kernel terms) / bound kernel terms: '
+               'the largest cost of one bound kernel term, relative to one field kernel term, at which pruning '
+               'still saves work. One bound term encloses value, gradient and Hessian of one center in interval '
+               'arithmetic, so a realistic cost is well above 1.\n')
+    out.append('| run | leaves | method | rejected | unresolved | field evals saved | bound kernel terms | break-even | certify s | eval s | total s | unpruned s | violations (edges / probes) |')
+    out.append('|---|---|---|---|---|---|---|---|---|---|---|---|---|')
     for k, r in runs.items():
         p = r.get('prune')
         if not p:
@@ -123,7 +136,7 @@ def tables(runs):
             v = p[m]
             out.append(f"| {k} | {p['leaf_n'][0]}^3 | {m} | {fnum(v['rejected_leaf_fraction'])} | "
                        f"{fnum(v['unresolved_leaf_fraction'])} | {fnum(v['evaluations_saved_fraction'])} | "
-                       f"{fnum(v['bound_kernel_terms'])} | {fnum(v['certify_seconds'])} | {fnum(v['eval_seconds'])} | "
+                       f"{fnum(v['bound_kernel_terms'])} | {fnum(breakeven(p, v))} | {fnum(v['certify_seconds'])} | {fnum(v['eval_seconds'])} | "
                        f"{fnum(v['total_seconds'])} | {fnum(p['baseline']['seconds'])} | "
                        f"{v['violations_sign_edges']} / {v['violations_interior_probes']} |")
     return '\n'.join(out) + '\n'
