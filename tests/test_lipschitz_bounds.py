@@ -302,8 +302,7 @@ class TestWitnesses(unittest.TestCase):
         v = verify_corner(snap, {'point': p, 'patches': [0, 1]})
         self.assertTrue(v['certified'])
         # numerical limits along both directions match the analytic prediction
-        nj, nk = (p - [-0.5, 0, 0]), (p - [0.5, 0, 0])
-        for lam, u in zip(v['lambda'], (-(nj + 0.1 * nk), -(0.1 * nj + nk))):
+        for lam, u in zip(v['lambda'], np.asarray(v['directions'])):
             F, _ = pu_evaluate(snap, (p + 1e-6 * u)[None])
             self.assertAlmostEqual(F[0], 1.0 / (lam + 1), places=4)
         self.assertGreater(v['limit_gap_lower_bound'], 0.5)

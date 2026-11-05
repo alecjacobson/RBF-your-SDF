@@ -49,7 +49,7 @@ def _diff_enclosure(snap, a, b, x, slack):
     return iv.down(d[0][0] - rad), iv.up(d[1][0] + rad)
 
 
-def verify_switch(snap, w, h=1e-7):
+def verify_switch(snap, w, h=1e-11):
     c = np.asarray(w['point'], float)
     a, b = w['patches']
     lo, hi = (c - h)[None], (c + h)[None]
@@ -77,11 +77,17 @@ def verify_corner(snap, w):
     dist = np.linalg.norm(C - p, axis=1)
     others = np.ones(len(R), bool); others[[j, k]] = False
     margin = float(np.min(dist[others] - R[others])) if others.any() else np.inf
-    outside_others = margin > 10 * eps
-    on_j = abs(dist[j] - R[j]) < 1e3 * eps
-    on_k = abs(dist[k] - R[k]) < 1e3 * eps
+    on_j = abs(dist[j] - R[j]) < 1e-6
+    on_k = abs(dist[k] - R[k]) < 1e-6
     nj = (p - C[j]) / R[j]; nk = (p - C[k]) / R[k]
-    u1 = -(nj + 0.1 * nk); u2 = -(0.1 * nj + nk)
+    # Directions u = -(cos(th) m + sin(th) w) with m, w the normalized sum and
+    # difference of the normals enter both supports iff |tan th| < c/s, where
+    # c = |nj + nk|/2 and s = |nj - nk|/2. Use th = +-half that limit.
+    c, s_ = np.linalg.norm(nj + nk) / 2, np.linalg.norm(nj - nk) / 2
+    m, wv = (nj + nk) / (2 * c), (nj - nk) / (2 * s_)
+    th = 0.5 * np.arctan2(c, s_)
+    u1 = -(np.cos(th) * m + np.sin(th) * wv)
+    u2 = -(np.cos(th) * m - np.sin(th) * wv)
     def lam(u):
         # along x = p + s u:  1 - t_j ~ s (-n_j.u) / R_j, and psi(t) ~ 5 (1-t)^4 near t = 1
         a, b = -(nj @ u) / R[j], -(nk @ u) / R[k]
@@ -92,9 +98,13 @@ def verify_corner(snap, w):
     sin_t = np.linalg.norm(np.cross(nj, nk))
     slack = 2 * (abs(dist[j] - R[j]) + abs(dist[k] - R[k])) / max(sin_t, 1e-300) + eps
     d = _diff_enclosure(snap, j, k, p, slack)
+    # the exact corner point must also lie outside every other support
+    outside_others = margin > slack + 10 * eps
     jump = float(iv.mig(d)) * factor * (1 - 1e-6)     # factor computed in float64; keep a margin
     ok = bool(outside_others and on_j and on_k and ok1 and ok2 and jump > 0)
-    return {'certified': ok, 'outside_other_supports_margin': margin, 'lambda': [l1, l2],
+    return {'certified': ok, 'directions': [u1.tolist(), u2.tolist()],
+            'outside_other_supports_margin': margin, 'slack': slack,
+            'on_both_spheres': bool(on_j and on_k), 'lambda': [l1, l2],
             'direction_factor': factor, 'f_j_minus_f_k': [float(d[0]), float(d[1])],
             'limit_gap_lower_bound': jump if ok else 0.0}
 
