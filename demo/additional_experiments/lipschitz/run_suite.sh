@@ -33,4 +33,5 @@ one() {
 }
 export -f one
 export RUN OUT
-suite | xargs -P "$JOBS" -I{} bash -c 'one "{}"'
+if [ "${REVERSE:-0}" = 1 ]; then ORDER="tail -r"; else ORDER=cat; fi
+suite | $ORDER | xargs -P "$JOBS" -I{} bash -c 'one "{}"'

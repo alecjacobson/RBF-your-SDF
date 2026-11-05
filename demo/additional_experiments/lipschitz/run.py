@@ -513,6 +513,11 @@ def main(argv=None):
     if args.resume and done.exists() and 'prune' in json.loads(done.read_text()):
         print(f'[{tag}] already complete, skipping')
         return None
+    lock = RESULTS_DIR / 'running.lock'
+    if args.resume and lock.exists():
+        print(f'[{tag}] running elsewhere ({lock}), skipping')
+        return None
+    lock.write_text(str(os.getpid()))
 
     def log(*a):
         print(f'[{tag} {time.strftime("%H:%M:%S")}]', *a, flush=True)
@@ -567,6 +572,7 @@ def main(argv=None):
         out['prune'] = prune_study(snap, cert, native, dom, args.prune_root, args.prune_depth, rng)
         save(); log('prune done')
     save()
+    lock.unlink(missing_ok=True)
     return out
 
 
