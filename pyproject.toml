@@ -20,6 +20,10 @@ demo = [
     "trimesh>=5.0.0",
     "scikit-image>=0.26",
 ]
+# Needed only by demo/additional_experiments/lipschitz (plots in its report).
+lipschitz = [
+    "matplotlib>=3.8",
+]
 
 [tool.scikit-build]
 cmake.source-dir = "cpp"

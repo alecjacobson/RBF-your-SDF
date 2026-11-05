@@ -65,6 +65,22 @@ private:
 public:
     bool is_trained() const override { return trained_; }
 
+    /// Read-only snapshot accessors (Lipschitz experiment). Patch p has
+    /// support center patch_center(p), half extents patch_half_ext(p) (sphere
+    /// mode: (R,R,R)) and local fit patch_fit(p).
+    int num_patches() const { return (int)patches_.size(); }
+    const Eigen::Vector3d& patch_center(int p) const { return patches_.at(p).center; }
+    const Eigen::Vector3d& patch_half_ext(int p) const { return patches_.at(p).half_ext; }
+    const DuchonInterpolator& patch_fit(int p) const { return *patches_.at(p).interp; }
+    bool uses_box_partition() const { return use_box_; }
+    double overlap() const { return overlap_; }
+    /// Patch indices whose support contains pt (same rule as the evaluator).
+    std::vector<int> patches_containing(const Eigen::Vector3d& pt) const {
+        std::vector<int> out; query_patches_containing(pt, out); return out;
+    }
+    /// Fallback patch used when no support contains pt.
+    int nearest_patch(const Eigen::Vector3d& pt) const { return query_nearest_patch(pt); }
+
 private:
     struct Patch {
         Eigen::Vector3d center;
