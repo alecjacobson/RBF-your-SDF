@@ -37,6 +37,7 @@ PYBIND11_MODULE(rbfyoursdf_cpp, m) {
         .def_readwrite("interp_partition", &sdf::Options::interp_partition)
         .def_readwrite("interp_overlap", &sdf::Options::interp_overlap)
         .def_readwrite("pair_local", &sdf::Options::pair_local)
+        .def_readwrite("pu_dedup_tol", &sdf::Options::pu_dedup_tol)
         .def_readwrite("tolerance", &sdf::Options::tolerance)
         .def_readwrite("gt_gradients", &sdf::Options::gt_gradients)
         .def_readwrite("iter_gradient_finding", &sdf::Options::iter_gradient_finding)
@@ -154,7 +155,48 @@ PYBIND11_MODULE(rbfyoursdf_cpp, m) {
              py::arg("x_new"), py::arg("chunk_size") = 5000)
         .def("predict_gradients", &sdf::PUInterpolator::predict_gradients,
              py::arg("x_new"), py::arg("chunk_size") = 5000)
-        .def("is_trained", &sdf::PUInterpolator::is_trained);
+        .def("is_trained", &sdf::PUInterpolator::is_trained)
+        .def("predict_with_gradients", [](const sdf::PUInterpolator& self,
+                                          const Eigen::MatrixXd& x) {
+            Eigen::VectorXd v; Eigen::MatrixXd g;
+            self.predict_with_gradients(x, v, g);
+            return py::make_tuple(v, g);
+        }, py::arg("x_new"))
+        .def("patches_containing", &sdf::PUInterpolator::patches_containing, py::arg("pt"))
+        .def("nearest_patch", &sdf::PUInterpolator::nearest_patch, py::arg("pt"))
+        .def("export_lipschitz_state", [](const sdf::PUInterpolator& self) {
+            // Read-only snapshot of every quantity the evaluator uses. Version
+            // bumps whenever the evaluator rules below change.
+            py::list patches;
+            for (int p = 0; p < self.num_patches(); p++) {
+                const auto& f = self.patch_fit(p);
+                py::dict d;
+                d["center"] = Eigen::Vector3d(self.patch_center(p));
+                d["half_ext"] = Eigen::Vector3d(self.patch_half_ext(p));
+                d["centers"] = f.centers();
+                d["alpha"] = f.alpha();
+                d["linear"] = f.affine_linear();
+                d["constant"] = f.affine_constant();
+                d["kernel"] = f.kernel_type();
+                d["reg"] = f.regularization();
+                patches.append(d);
+            }
+            py::dict policy;
+            policy["partition"] = self.uses_box_partition() ? "box" : "sphere";
+            policy["weight"] = "wendland_c2_(1-t)^4(4t+1)";
+            policy["support_test"] = self.uses_box_partition()
+                ? "all(|x-c| <= h)" : "|x-c|^2 <= R^2";
+            policy["denominator_rule"] = "blend if W > 0 else nearest-support patch raw fit";
+            policy["nearest_metric"] = "max(|x-c|-R,0) (sphere) / AABB distance (box)";
+            policy["overlap"] = self.overlap();
+            policy["dedup_tol"] = self.dedup_tol();
+            py::dict out;
+            out["version"] = 1;
+            out["type"] = "PUInterpolator";
+            out["policy"] = policy;
+            out["patches"] = patches;
+            return out;
+        });
 
     // ── MainResult ──────────────────────────────────────────────────
     py::class_<sdf::MainResult>(m, "MainResult")

@@ -37,6 +37,7 @@ struct Options {
     std::string interpolator_type = "PU";     // "PU" or "Duchon"
     std::string interp_partition  = "box";    // "box" or "sphere" (any value other than "box" is treated as "sphere")
     double interp_overlap         = 0.5;
+    double pu_dedup_tol           = 5e-4;     // PU: merge constraints closer than this before fitting
     bool pair_local               = true;     // PU: pair each local RBF solve with missing input/projection partners
     std::string iter_gradient_finding = "optimize";  // "optimize" or "sample"
     // Solver behind iter_gradient_finding == "optimize":

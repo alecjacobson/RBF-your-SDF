@@ -41,6 +41,15 @@ public:
     /// Duchon instances to avoid redundant work.
     void set_dedup(bool enabled) { dedup_ = enabled; }
 
+    /// Read-only access to the frozen fit, for external analysis (e.g. the
+    /// Lipschitz experiment). f(x) = sum_i alpha_i k(|x - q_i|) + p.x + q.
+    const Eigen::MatrixXd& centers() const { return points_; }
+    const Eigen::VectorXd& alpha() const { return alpha_; }
+    const Eigen::VectorXd& affine_linear() const { return p_; }
+    double affine_constant() const { return q_; }
+    const std::string& kernel_type() const { return kernel_type_; }
+    double regularization() const { return reg_; }
+
 private:
     double kernel_eval(double r) const;
 
