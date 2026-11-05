@@ -282,5 +282,31 @@ class TestPruning(unittest.TestCase):
         self.assertGreater(sign_change_violations(vals, pr.leaf_n, np.ones(pr.leaf_label.shape, bool))[0], 0)
 
 
+class TestWitnesses(unittest.TestCase):
+    def test_fallback_switch_jump_is_certified(self):
+        """Certify the jump of the nearest-patch fallback between two disjoint constant patches."""
+        from lipschitz.witness import verify_switch
+        snap = make_snapshot([[-2, 0, 0], [2, 0, 0]], [1.0, 1.0],
+                             [const_fit(-1.0, [-2, 0, 0]), const_fit(1.0, [2, 0, 0])])
+        v = verify_switch(snap, {'point': [0.0, 0.0, 0.0], 'patches': [0, 1]})
+        self.assertTrue(v['certified'])
+        self.assertAlmostEqual(v['jump_lower_bound'], 2.0, places=9)
+        self.assertLessEqual(v['jump_lower_bound'], 2.0)
+
+    def test_union_boundary_corner_limits_depend_on_direction(self):
+        """Certify direction-dependent limits where two support spheres meet outside all others."""
+        from lipschitz.witness import verify_corner
+        snap = make_snapshot([[-0.5, 0, 0], [0.5, 0, 0]], [1.0, 1.0],
+                             [const_fit(0.0, [-0.5, 0, 0]), const_fit(1.0, [0.5, 0, 0])])
+        p = np.array([0.0, np.sqrt(0.75), 0.0])
+        v = verify_corner(snap, {'point': p, 'patches': [0, 1]})
+        self.assertTrue(v['certified'])
+        # numerical limits along both directions match the analytic prediction
+        for lam, u in zip(v['lambda'], np.asarray(v['directions'])):
+            F, _ = pu_evaluate(snap, (p + 1e-6 * u)[None])
+            self.assertAlmostEqual(F[0], 1.0 / (lam + 1), places=4)
+        self.assertGreater(v['limit_gap_lower_bound'], 0.5)
+
+
 if __name__ == '__main__':
     unittest.main()
