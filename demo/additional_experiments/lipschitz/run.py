@@ -494,6 +494,8 @@ def main(argv=None):
                     help='fit variant: RBF regularization (baseline: package default 0)')
     ap.add_argument('--dedup-tol', type=float, default=None,
                     help='fit variant: PU dedup tolerance (baseline: 5e-4)')
+    ap.add_argument('--resume', action='store_true',
+                    help='skip the run if its results.json already has a prune section')
     ap.add_argument('--expand', type=float, default=0.0,
                     help='expand the query domain by this fraction per side (extrapolation stress)')
     args = ap.parse_args(argv)
@@ -507,6 +509,10 @@ def main(argv=None):
            + (f'_expand{args.expand}' if args.expand else ''))
     RESULTS_DIR = RESULTS / tag
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    done = RESULTS_DIR / 'results.json'
+    if args.resume and done.exists() and 'prune' in json.loads(done.read_text()):
+        print(f'[{tag}] already complete, skipping')
+        return None
 
     def log(*a):
         print(f'[{tag} {time.strftime("%H:%M:%S")}]', *a, flush=True)
