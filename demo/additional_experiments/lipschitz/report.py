@@ -26,7 +26,7 @@ def load_runs(root=RESULTS):
     runs = {}
     for p in sorted(root.glob('*/results.json')):
         r = json.loads(p.read_text())
-        if 'prune' in r:                    # only completed runs
+        if 'grids' in r:                    # runs that reached the certificate stage
             runs[p.parent.name] = r
     return runs
 
@@ -109,18 +109,18 @@ def tables(runs):
                        f"{fnum((v.get('blend_share_best') or {}).get('median'))} | {sum(v['violations'].values())} | "
                        f"{fnum(v['certify_seconds'])} |")
     out.append('\n### Transitions\n')
-    out.append('| run | fallback volume fraction | witnesses (kind: count, max limiting jump) |')
-    out.append('|---|---|---|')
+    out.append('| run | fallback volume fraction | candidates | analytically certified | certified jump lower bounds (min / max) |')
+    out.append('|---|---|---|---|---|')
     for k, r in runs.items():
         t = r.get('transitions')
         if not t:
             continue
-        kinds = {}
-        for w in t['witnesses']:
-            c, m = kinds.get(w['kind'], (0, 0.0))
-            kinds[w['kind']] = (c + 1, max(m, w['limiting_jump_estimate']))
-        desc = '; '.join(f'{kk}: {c}, {fnum(m)}' for kk, (c, m) in kinds.items()) or 'none found'
-        out.append(f"| {k} | {fnum(t['fallback_volume_fraction'])} | {desc} |")
+        vp = RESULTS / k / 'witnesses_verified.json'
+        ver = json.loads(vp.read_text()) if vp.exists() else []
+        cert = [v for v in ver if v['certified']]
+        jumps = [v.get('jump_lower_bound', v.get('limit_gap_lower_bound', 0.0)) for v in cert]
+        rng_ = f'{fnum(min(jumps))} / {fnum(max(jumps))}' if jumps else '-'
+        out.append(f"| {k} | {fnum(t['fallback_volume_fraction'])} | {len(t['witnesses'])} | {len(cert)} | {rng_} |")
     out.append('\n### Conservative cell rejection (same octree, same leaf resolution)\n')
     out.append('Break-even = (unpruned kernel terms - pruned evaluation kernel terms) / bound kernel terms: '
                'the largest cost of one bound kernel term, relative to one field kernel term, at which pruning '
@@ -156,10 +156,12 @@ def fig_local(runs, out):
             p90 = [v['ratio'][m]['p90'] for v in lb.values()]
             ax.plot(rho, med, color=SERIES[i], lw=2, marker='o', ms=4, label=m)
             ax.fill_between(rho, med, p90, color=SERIES[i], alpha=0.12, lw=0)
-            ax.annotate(m, (rho[-1], med[-1]), color=INK2, fontsize=8, xytext=(-14, 4),
-                        textcoords='offset points')
         ax.axhline(1, color=INK2, lw=0.8, ls=':')
         ax.set_xscale('log'); ax.set_yscale('log')
+        from matplotlib.ticker import NullFormatter, FixedLocator, FormatStrFormatter
+        ax.xaxis.set_major_locator(FixedLocator([0.015, 0.03, 0.06, 0.12, 0.24]))
+        ax.xaxis.set_major_formatter(FormatStrFormatter('%g'))
+        ax.xaxis.set_minor_formatter(NullFormatter())
         ax.set_title(k, fontsize=9, color=INK)
         ax.set_xlabel('cell half-diagonal ρ (normalized units)', fontsize=8, color=INK2)
         style(ax)
@@ -182,6 +184,8 @@ def fig_gap_cdf(runs, out, grid='64'):
         ok = (z['status'] != 2) & (z['obs'] > 0)
         for i, (key, lab) in enumerate((('L_best', 'best valid bound'), ('L_simple', 'simple disagreement'),
                                         ('L_B0', 'B0 through blend'))):
+            if key not in z.files:          # C++-certifier runs store fewer variants
+                continue
             r = np.sort(z[key][ok] / z['obs'][ok])
             ax.plot(r, np.linspace(0, 1, len(r)), color=SERIES[i], lw=2, label=lab)
         r = np.sort(z['L_local_only'][ok] / z['obs'][ok])
@@ -201,7 +205,8 @@ def fig_gap_cdf(runs, out, grid='64'):
 
 def fig_blend(runs, out, grid='32'):
     import matplotlib.pyplot as plt
-    names = [k for k in runs if grid in runs[k].get('grids', {})]
+    names = [k for k in runs if grid in runs[k].get('grids', {})
+             and 'blend_best' in np.load(RESULTS / k / f'grid_{grid}.npz').files]
     if not names:
         return
     fig, axes = plt.subplots(1, len(names), figsize=(3.2 * len(names), 3.0), squeeze=False, sharey=True)
@@ -283,18 +288,20 @@ def fig_witness(runs, out):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--out', type=Path, default=RESULTS / 'report')
-    ap.add_argument('--runs', nargs='*', default=None)
+    ap.add_argument('--runs', nargs='*', default=None, help='runs in the tables (default: all)')
+    ap.add_argument('--figure-runs', nargs='*', default=None, help='runs in the figures (default: --runs)')
     a = ap.parse_args()
     runs = load_runs()
     if a.runs:
         runs = {k: v for k, v in runs.items() if k in a.runs}
+    fruns = {k: v for k, v in runs.items() if k in a.figure_runs} if a.figure_runs else runs
     a.out.mkdir(parents=True, exist_ok=True)
     (a.out / 'report_tables.md').write_text(tables(runs))
-    fig_local(runs, a.out)
+    fig_local(fruns, a.out)
     for g in ('32', '64'):
-        fig_gap_cdf(runs, a.out, g)
-    fig_blend(runs, a.out)
-    fig_prune(runs, a.out)
+        fig_gap_cdf(fruns, a.out, g)
+    fig_blend(fruns, a.out)
+    fig_prune(fruns, a.out)
     fig_witness(runs, a.out)
     print('wrote', a.out)
 
