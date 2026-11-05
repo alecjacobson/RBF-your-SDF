@@ -471,3 +471,25 @@ class PUCertifier:
             with np.errstate(divide='ignore'):
                 val = np.where(Wm[bs] > 0, iv.up(tot / np.where(Wm[bs] > 0, Wm[bs], 1.0)), np.inf)
             out[name][bb] = val
+
+
+class NativeCertifier:
+    """Same interface as PUCertifier.certify, backed by PUInterpolator.certify_boxes (C++).
+
+    The C++ path computes the same certified quantities except the direct
+    interval quotient (``L_interval``), which never tightened ``L_best`` in
+    the Python runs; ``L_best`` there equals the Python ``L_pu``.
+    """
+
+    def __init__(self, native):
+        self.native = native
+
+    def certify(self, lo, hi, variants=True):
+        d = self.native.certify_boxes(np.ascontiguousarray(lo, dtype=np.float64),
+                                      np.ascontiguousarray(hi, dtype=np.float64))
+        out = {k: np.asarray(v) for k, v in d.items() if k != 'cost_bound_terms'}
+        out['status'] = out['status'].astype(np.int8)
+        out['hull_sign'] = out['hull_sign'].astype(np.int8)
+        out['L_pu'] = out['L_best']
+        out['cost_bound_terms'] = int(d['cost_bound_terms'])
+        return out

@@ -168,11 +168,15 @@ if(BUILD_PYTHON_BINDINGS)
 endif()
 
 # ── Core static library ──────────────────────────────────────────────
+# The certifier's enclosures assume IEEE round-to-nearest with no reassociation.
+set_source_files_properties(src/lipschitz_certify.cpp PROPERTIES
+    COMPILE_OPTIONS "-fno-fast-math;-ffp-contract=off")
 add_library(sdf_core STATIC
     src/interpolator.cpp
     src/optimize_lbfgspp.cpp
     src/duchon_interpolator.cpp
     src/pu_interpolator.cpp
+    src/lipschitz_certify.cpp
     src/visibility.cpp
     src/clamp.cpp
     src/optimization.cpp
