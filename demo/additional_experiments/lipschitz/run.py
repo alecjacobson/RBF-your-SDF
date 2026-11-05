@@ -427,13 +427,15 @@ def kernel_terms(snap, pts):
     return int(total)
 
 
-def prune_study(snap, cert, native, dom, root_n, depth, rng, reps=3):
+def prune_study(snap, cert, native, dom, root_n, depth, rng, reps=3, certifier='python'):
     lo, hi = dom
     leaf_n = np.array([root_n * 2 ** depth] * 3)
     allpts, _ = corner_points(lo, hi, leaf_n)
     t_full = timed(lambda: native.predict(allpts), reps=reps)
     ref_vals = native.predict(allpts)
-    res = {'leaf_n': leaf_n, 'root_n': root_n, 'depth': depth,
+    if certifier == 'cpp':
+        cert = pub.NativeCertifier(native)
+    res = {'leaf_n': leaf_n, 'root_n': root_n, 'depth': depth, 'certifier': certifier,
            'baseline': {'field_evaluations': int(len(allpts)), 'seconds': t_full,
                         'kernel_terms': kernel_terms(snap, allpts)}}
     cache = {}
@@ -494,6 +496,9 @@ def main(argv=None):
                     help='fit variant: RBF regularization (baseline: package default 0)')
     ap.add_argument('--dedup-tol', type=float, default=None,
                     help='fit variant: PU dedup tolerance (baseline: 5e-4)')
+    ap.add_argument('--certifier', choices=('python', 'cpp'), default='python',
+                    help='certifier used by the pruning stage (cpp: PUInterpolator.certify_boxes)')
+    ap.add_argument('--tag-suffix', default='', help='appended to the results directory name')
     ap.add_argument('--resume', action='store_true',
                     help='skip the run if its results.json already has a prune section')
     ap.add_argument('--expand', type=float, default=0.0,
@@ -506,7 +511,7 @@ def main(argv=None):
     if args.dedup_tol is not None:
         fit_kwargs['pu_dedup_tol'] = args.dedup_tol
     tag = (f'{args.input}_{args.grid}' + ''.join(f'_{k}{v:g}' for k, v in fit_kwargs.items())
-           + (f'_expand{args.expand}' if args.expand else ''))
+           + (f'_expand{args.expand}' if args.expand else '') + args.tag_suffix)
     RESULTS_DIR = RESULTS / tag
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     done = RESULTS_DIR / 'results.json'
@@ -569,7 +574,8 @@ def main(argv=None):
         out['transitions'] = transition_probes(snap, native, dom, rng)
         save(); log('probes done', len(out['transitions']['witnesses']), 'witnesses')
     if 'prune' not in args.skip:
-        out['prune'] = prune_study(snap, cert, native, dom, args.prune_root, args.prune_depth, rng)
+        out['prune'] = prune_study(snap, cert, native, dom, args.prune_root, args.prune_depth, rng,
+                                   certifier=args.certifier)
         save(); log('prune done')
     save()
     lock.unlink(missing_ok=True)

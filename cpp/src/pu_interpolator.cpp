@@ -465,6 +465,10 @@ void PUInterpolator::fit(const Eigen::MatrixXd& points,
                           const Eigen::VectorXi* mask) {
     sample_points_ = points;
     sample_values_ = values;
+    {
+        std::lock_guard<std::mutex> lock(certify_mutex_);
+        certify_ready_ = false;
+    }
 
     Eigen::MatrixXd pts;
     Eigen::VectorXd vals;

@@ -4,6 +4,9 @@
 #include "duchon_interpolator.h"
 #include "kdtree.h"
 #include <memory>
+#include <mutex>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace sdf {
@@ -81,6 +84,16 @@ public:
     std::vector<int> patches_containing(const Eigen::Vector3d& pt) const {
         std::vector<int> out; query_patches_containing(pt, out); return out;
     }
+    /// Certified enclosures on axis-aligned boxes (Lipschitz experiment; see
+    /// src/lipschitz_certify.cpp). status: 0 certified (W_min > 0), 1 fixed
+    /// fallback patch, 2 unresolved (no finite bound is claimed).
+    struct BoxCertificates {
+        Eigen::VectorXi status, n_active, hull_sign, fallback_patch;
+        Eigen::VectorXd rho, W_min, F0_lo, F0_hi, L_best, L_local, L_B0;
+        long long cost_terms = 0;
+    };
+    BoxCertificates certify_boxes(const Eigen::MatrixXd& lo, const Eigen::MatrixXd& hi) const;
+
     /// Fallback patch used when no support contains pt.
     int nearest_patch(const Eigen::Vector3d& pt) const { return query_nearest_patch(pt); }
 
@@ -139,6 +152,19 @@ private:
     std::vector<double> patch_aabb_lo_, patch_aabb_hi_;  // flat 3*np
     double reg_ = 0;
     double dedup_tol_ = 5e-4;
+
+    // Box-independent certified constants per patch, built lazily by
+    // certify_boxes and invalidated by fit().
+    struct PatchConst {
+        double A_up = 0, lin_norm_up = 0, S_up = 0, m0_mag_up = 0, m1_norm_up = 0;
+        Eigen::Vector3d centroid = Eigen::Vector3d::Zero();
+    };
+    mutable std::vector<PatchConst> patch_const_;
+    mutable std::unordered_map<long long, double> pair_A_;      // key j*P+k, j<k
+    mutable std::unordered_set<long long> pair_identical_;
+    mutable std::mutex certify_mutex_;
+    mutable bool certify_ready_ = false;
+    void prepare_certify() const;
 
     void build_patch_bvh();
     void query_patches_containing(

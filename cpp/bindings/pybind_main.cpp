@@ -162,6 +162,22 @@ PYBIND11_MODULE(rbfyoursdf_cpp, m) {
             self.predict_with_gradients(x, v, g);
             return py::make_tuple(v, g);
         }, py::arg("x_new"))
+        .def("certify_boxes", [](const sdf::PUInterpolator& self,
+                                 const Eigen::MatrixXd& lo, const Eigen::MatrixXd& hi) {
+            sdf::PUInterpolator::BoxCertificates c;
+            {
+                py::gil_scoped_release release;
+                c = self.certify_boxes(lo, hi);
+            }
+            py::dict d;
+            d["status"] = c.status; d["n_active"] = c.n_active; d["hull_sign"] = c.hull_sign;
+            d["fallback_patch"] = c.fallback_patch; d["rho"] = c.rho; d["W_min"] = c.W_min;
+            d["F0_lo"] = c.F0_lo; d["F0_hi"] = c.F0_hi; d["L_best"] = c.L_best;
+            d["L_local_only"] = c.L_local; d["L_B0"] = c.L_B0; d["cost_bound_terms"] = c.cost_terms;
+            return d;
+        }, py::arg("lo"), py::arg("hi"),
+        "Certified per-box enclosures of the PU field (sphere partition): status, W_min, "
+        "center value interval, hull sign and gradient bounds. See src/lipschitz_certify.cpp.")
         .def("patches_containing", &sdf::PUInterpolator::patches_containing, py::arg("pt"))
         .def("nearest_patch", &sdf::PUInterpolator::nearest_patch, py::arg("pt"))
         .def("export_lipschitz_state", [](const sdf::PUInterpolator& self) {

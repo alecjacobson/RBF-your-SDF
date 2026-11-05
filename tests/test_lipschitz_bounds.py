@@ -308,5 +308,32 @@ class TestWitnesses(unittest.TestCase):
         self.assertGreater(v['limit_gap_lower_bound'], 0.5)
 
 
+class TestNativeCertifier(unittest.TestCase):
+    def test_native_certifier_matches_python_reference(self):
+        """Match statuses, decisions and bounds of the C++ certifier to the Python reference."""
+        try:
+            import rbfyoursdf
+        except ImportError:
+            self.skipTest('rbfyoursdf extension not built')
+        from lipschitz.adapter import snapshot_from_native
+        from lipschitz.inputs import make_input
+        from lipschitz.certify import regular_cells
+        pts, vals, _ = make_input('sphere', 10)
+        res = rbfyoursdf.main_algorithm(pts, vals, max_iters=2, verbose=False)
+        native = res.interpolator.interpolator
+        snap = snapshot_from_native(res.interpolator)
+        lo, hi, _ = regular_cells(np.full(3, -0.5), np.full(3, 0.5), 8)
+        c = pub.NativeCertifier(native).certify(lo, hi)
+        p = pub.PUCertifier(snap).certify(lo, hi)
+        np.testing.assert_array_equal(c['status'], p['status'])
+        np.testing.assert_array_equal(c['n_active'], p['n_active'])
+        np.testing.assert_array_equal(c['hull_sign'], p['hull_sign'])
+        ok = c['status'] == pub.CERTIFIED
+        np.testing.assert_allclose(c['W_min'][ok], p['W_min'][ok], rtol=1e-12)
+        np.testing.assert_allclose(c['L_best'][ok], p['L_pu'][ok], rtol=1e-9)
+        np.testing.assert_allclose(c['L_B0'][ok], p['L_B0'][ok], rtol=1e-9)
+        self.assertTrue(np.all(c['F0_lo'][ok] <= p['F0_hi'][ok]) and np.all(p['F0_lo'][ok] <= c['F0_hi'][ok]))
+
+
 if __name__ == '__main__':
     unittest.main()
