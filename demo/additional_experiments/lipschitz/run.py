@@ -292,16 +292,20 @@ def grid_study(snap, cert, native, dom, n, rng, subset=None, n_opt=60):
            'n_active': quantiles(out['n_active']), 'W_min': quantiles(out['W_min'][st == pub.CERTIFIED]),
            'zero_observed': int((obs == 0).sum())}
     ok = (st != pub.UNRESOLVED) & (obs > 0)
+    # the C++ certifier reports a subset of the bound variants
     res['ratio'] = {k: quantiles(out[k][ok] / obs[ok]) for k in
                     ('L_best', 'L_pu', 'L_interval', 'L_simple', 'L_B0', 'L_local_only', 'L_local_B0',
-                     'L_local_B2', 'L_local_B3')}
+                     'L_local_B2', 'L_local_B3') if k in out}
     res['violations'] = {k: int((out[k][ok] < obs[ok]).sum())
-                         for k in ('L_best', 'L_pu', 'L_interval', 'L_simple', 'L_B0')}
-    res['interval_wins_fraction'] = float((out['L_interval'][ok] < out['L_pu'][ok]).mean()) if ok.any() else None
+                         for k in ('L_best', 'L_pu', 'L_interval', 'L_simple', 'L_B0') if k in out}
+    if 'L_interval' in out:
+        res['interval_wins_fraction'] = float((out['L_interval'][ok] < out['L_pu'][ok]).mean()) if ok.any() else None
+    res['blend_share_best'] = None
     res['local_only_below_observed'] = int((out['L_local_only'][ok] < obs[ok]).sum())
     cert_ok = st == pub.CERTIFIED
-    res['blend_share_best'] = quantiles(out['blend_best'][cert_ok] /
-                                        np.maximum(out['L_best'][cert_ok], 1e-300))
+    if 'blend_best' in out:
+        res['blend_share_best'] = quantiles(out['blend_best'][cert_ok] /
+                                            np.maximum(out['L_best'][cert_ok], 1e-300))
     # optimized lower bounds on a few certified cells
     cand = np.flatnonzero(ok)
     if len(cand):
@@ -497,7 +501,8 @@ def main(argv=None):
     ap.add_argument('--dedup-tol', type=float, default=None,
                     help='fit variant: PU dedup tolerance (baseline: 5e-4)')
     ap.add_argument('--certifier', choices=('python', 'cpp'), default='python',
-                    help='certifier used by the pruning stage (cpp: PUInterpolator.certify_boxes)')
+                    help='certifier for the grid and pruning stages (cpp: PUInterpolator.certify_boxes); '
+                         'the local-bound study always uses the Python reference')
     ap.add_argument('--tag-suffix', default='', help='appended to the results directory name')
     ap.add_argument('--resume', action='store_true',
                     help='skip the run if its results.json already has a prune section')
@@ -541,6 +546,8 @@ def main(argv=None):
     t = time.perf_counter()
     cert = pub.PUCertifier(snap)
     out['preprocess_seconds'] = time.perf_counter() - t
+    out['certifier'] = args.certifier
+    grid_cert = pub.NativeCertifier(native) if args.certifier == 'cpp' else cert
     out['pair_shared_fraction'] = quantiles(cert.pair_shared_fraction)
     log('preprocess', f"{out['preprocess_seconds']:.1f}s")
 
@@ -561,12 +568,12 @@ def main(argv=None):
     if 'grid' not in args.skip:
         out['grids'] = {}
         for n in args.grids:
-            r, arrays = grid_study(snap, cert, native, dom, n, rng)
+            r, arrays = grid_study(snap, grid_cert, native, dom, n, rng)
             out['grids'][str(n)] = r
             np.savez_compressed(RESULTS_DIR / f'grid_{n}.npz', **arrays)
             save(); log('grid', n, f"{r['certify_seconds']:.1f}s", r['status_counts'])
         if args.subset_grid:
-            r, arrays = grid_study(snap, cert, native, dom, args.subset_grid, rng, subset=args.subset_cells)
+            r, arrays = grid_study(snap, grid_cert, native, dom, args.subset_grid, rng, subset=args.subset_cells)
             out['grids'][f'{args.subset_grid}_subset'] = r
             np.savez_compressed(RESULTS_DIR / f'grid_{args.subset_grid}_subset.npz', **arrays)
             save(); log('grid subset done')

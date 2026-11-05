@@ -106,7 +106,7 @@ def tables(runs):
             out.append(f"| {k} | {g} | {n} | {fnum(sc['certified'] / n)} | {fnum(sc['fallback_fixed'] / n)} | "
                        f"{fnum(sc['unresolved'] / n)} | {fnum(b['median'])} [{fnum(b['p90'])}, {fnum(b['p99'])}, {fnum(b['max'])}] | "
                        f"{fnum(v['ratio']['L_B0']['median'])} | {fnum(v['ratio']['L_local_only']['median'])} | "
-                       f"{fnum(v['blend_share_best']['median'])} | {sum(v['violations'].values())} | "
+                       f"{fnum((v.get('blend_share_best') or {}).get('median'))} | {sum(v['violations'].values())} | "
                        f"{fnum(v['certify_seconds'])} |")
     out.append('\n### Transitions\n')
     out.append('| run | fallback volume fraction | witnesses (kind: count, max limiting jump) |')
