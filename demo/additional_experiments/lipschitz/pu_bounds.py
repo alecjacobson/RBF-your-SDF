@@ -202,7 +202,10 @@ class PUCertifier:
         others = smin.copy()
         others[np.arange(m), j] = np.inf
         # patches beyond the k queried centers: |x - xi| >= dd_k - rho for x in B
-        beyond = iv.down(iv.down(dd[:, -1] - rho) - self.Rmax) if k < self.P else np.full(m, np.inf)
+        # cKDTree distances are plain float64; shrink by a relative 1e-12
+        # (orders of magnitude above their rounding error) before using them.
+        dk = iv.down(dd[:, -1] * (1.0 - 1e-12))
+        beyond = iv.down(iv.down(dk - rho) - self.Rmax) if k < self.P else np.full(m, np.inf)
         ok = best < np.minimum(others.min(axis=1), beyond)
         return np.where(ok, ii[np.arange(m), j], -1)
 
